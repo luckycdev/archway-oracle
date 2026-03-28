@@ -17,7 +17,7 @@ st.markdown("Predicting future traffic jams by analyzing historical trends, weat
 # --- 1. Data Loading & Feature Engineering ---
 @st.cache_data
 def load_and_prep_data():
-    df = pd.read_csv("C:/Users/flami/Repositories/Traffic Predictor/traffic-predictor/data/traffic.csv")
+    df = pd.read_csv("/workspaces/traffic-predictor/data/traffic.csv")
     df['DateTime'] = pd.to_datetime(df['DateTime'])
     
     df['hour'] = df['DateTime'].dt.hour

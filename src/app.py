@@ -6,6 +6,7 @@ from sklearn.metrics import mean_absolute_error
 from src.data_processing import load_and_prep_data, classify_traffic
 from src.model import train_and_evaluate
 from src.visualizations import build_traffic_chart
+from src.maps import build_google_map, show_map_legend
 
 # --- 1. Page Configuration
 st.set_page_config(page_title="Traffic Predictor AI", layout="wide")
@@ -76,6 +77,16 @@ if not junction_data.empty:
     st.markdown("### 🔮 The AI's 24-Hour Forecast")
     fig = build_traffic_chart(history_data, future_data, selected_date)
     st.plotly_chart(fig, use_container_width=True)
+
+    # --- Google Maps Section ---
+    st.markdown("---")
+    st.markdown("### 🗺️ Live Junction Map")
+    st.markdown("Colored markers show the **predicted traffic level** for each junction in the next hour.")
+    
+    api_key = st.secrets["GOOGLE_MAPS_API_KEY"]
+
+    show_map_legend()
+    build_google_map(future_data, selected_junction, api_key)
 
     # --- 7. Immediate Prediction ---
     if not future_data.empty:

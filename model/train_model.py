@@ -1,3 +1,4 @@
+# 1. Imports and Page Configuration
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -9,12 +10,17 @@ import holidays
 import requests
 from sklearn.model_selection import RandomizedSearchCV
 
-# --- Page Configuration ---
 st.set_page_config(page_title="Traffic Predictor AI", layout="wide")
 st.title("🚦 Smart City Traffic Prediction Dashboard")
 st.markdown("Predicting future traffic jams by analyzing historical trends, weather, and holidays.")
 
-# --- 1. Data Loading & Feature Engineering ---
+# 2. Helper Functions
+def classify_traffic(volume):
+    if volume > 50: return "🔴 Red (Heavy)"
+    elif volume > 20: return "🟡 Yellow (Moderate)"
+    else: return "🟢 Green (Clear)"
+
+# 3. Load and Prepare Data
 @st.cache_data
 def load_and_prep_data():
     df = pd.read_csv("/workspaces/traffic-predictor/data/traffic.csv")
@@ -81,7 +87,7 @@ def load_and_prep_data():
 with st.spinner("Processing data & pulling St. Louis weather..."):
     data = load_and_prep_data()
 
-# --- 2. Robust Evaluation Training ---
+# 4. Train Model and Cross-Validation
 @st.cache_resource
 def train_and_evaluate(df):
     features = ['Junction', 'hour', 'day', 'month', 'is_weekend', 
@@ -126,6 +132,7 @@ def train_and_evaluate(df):
 
     # Predict on the 20% test set
     test_df['Predicted_Vehicles'] = model.predict(X_test)
+    test_df['Traffic_Level'] = test_df['Predicted_Vehicles'].apply(classify_traffic)
     ai_mae = mean_absolute_error(test_df[target], test_df['Predicted_Vehicles'])
     baseline_mae = mean_absolute_error(test_df[target], test_df['lag24'])
     
@@ -152,7 +159,7 @@ def train_and_evaluate(df):
 with st.spinner("Tuning Hyperparameters & Running Cross-Validation (This may take a minute)..."):
     test_data, ai_mae, baseline_mae, cv_scores, winning_params = train_and_evaluate(data)
 
-# --- 3. Sidebar UI ---
+# 5. Sidebar / User Input
 st.sidebar.header("Time Machine Controls")
 st.sidebar.info("Use these controls to step into the past and see what the AI would have predicted.")
 
@@ -171,17 +178,18 @@ if not junction_data.empty:
         value=min_date.to_pydatetime(), format="YYYY-MM-DD HH:mm"
     )
 
+    # 6. Filter Data
     history_data = junction_data[
         (junction_data['DateTime'] <= selected_date) & 
         (junction_data['DateTime'] >= selected_date - pd.Timedelta(hours=72))
     ]
-    
     future_data = junction_data[
         (junction_data['DateTime'] > selected_date) & 
         (junction_data['DateTime'] <= selected_date + pd.Timedelta(hours=24))
     ]
+    future_data['Traffic_Level'] = future_data['Predicted_Vehicles'].apply(classify_traffic)
 
-    # --- 4. The "What the AI Knows" Section (Plain English) ---
+    # 7. Visualization
     st.markdown("---")
     st.markdown(f"### 🧠 What the AI sees at **{selected_date.strftime('%I:%M %p on %b %d, %Y')}**")
     st.markdown("Before making a prediction, our model looks at the current environmental and historical context:")
@@ -196,7 +204,13 @@ if not junction_data.empty:
         c3.metric("🎉 Is it a Holiday?", "Yes (Traffic Behavior Changes)" if ctx['is_holiday'] == 1 else "No (Normal Day)")
         c4.metric("📈 Recent 6-Hour Trend", f"{ctx['rolling_mean_6h']:.1f} vehicles/hr")
 
-    # --- 5. The Interactive Chart ---
+    future_data['Traffic_Level'] = future_data['Predicted_Vehicles'].apply(classify_traffic)
+    color_map = {
+        "🔴 Red (Heavy)": "red",
+        "🟡 Yellow (Moderate)": "yellow",
+        "🟢 Green (Clear)": "green"
+    }
+
     st.markdown("### 🔮 The AI's 24-Hour Forecast")
     fig = go.Figure()
 
@@ -215,9 +229,63 @@ if not junction_data.empty:
         shapes=[dict(type="line", x0=selected_date, x1=selected_date, y0=0, y1=1, yref="paper", line=dict(color="White", width=2, dash="dash"))],
         margin=dict(l=0, r=0, t=30, b=0)
     )
+
+    fig.add_trace(go.Scatter(
+        x=future_data['DateTime'],
+        y=future_data['Predicted_Vehicles'],
+        mode='markers',
+        name='Traffic Level',
+        marker=dict(
+            size=8,
+            color=[color_map[level] for level in future_data['Traffic_Level']]
+        )
+    ))
+
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- 6. Business Impact & Evaluation (For Non-Technical Judges) ---
+    # 8. Immediate Traffic Prediction and Next 3-hour Predictions
+    if not future_data.empty:
+        next_hour = future_data.iloc[0]
+
+        st.markdown("### 🚨 Immediate Traffic Prediction")
+
+        st.metric(
+            label="Next Hour Traffic",
+            value=classify_traffic(next_hour['Predicted_Vehicles'])
+        )
+
+    st.markdown("###🚦Traffic Prediction (Next 3 Hours)")
+    future_preview = future_data.head(3)
+    if future_preview.empty:
+        st.info("No future data available for this selection.")
+    else:
+        for _,row in future_preview.iterrows():
+            traffic_level = classify_traffic(row['Predicted_Vehicles'])
+            time_str = row['DateTime'].strftime('%I:%M %p')
+
+            if "Red" in traffic_level:
+                st.error(f"{time_str} → {traffic_level}")
+            elif "Yellow" in traffic_level:
+                st.warning(f"{time_str} → {traffic_level}")
+            else:
+                st.success(f"{time_str} → {traffic_level}")
+
+            st.write(
+                f"{row['DateTime'].strftime('%I:%M %p')} → {classify_traffic(row['Predicted_Vehicles'])}"
+            )
+
+    # 9. Best Travel Time
+    best_time = future_preview.loc[
+        future_preview['Predicted_Vehicles'].idxmin()
+    ]
+
+    st.markdown("---")
+    st.success(
+        f"🚗 Best time to travel: **{best_time['DateTime'].strftime('%I:%M %p')}** "
+        f"({classify_traffic(best_time['Predicted_Vehicles'])})"
+    )
+
+    # 10. Business Metrics
     st.markdown("---")
     st.markdown("### 🏆 Model Performance: How much better is this than a human guess?")
     st.info("To prove our AI is useful, we compared it against a 'Naive Human Guess' (assuming tomorrow's traffic will just be exactly the same as today's traffic).")
@@ -233,7 +301,7 @@ if not junction_data.empty:
         j_mae = mean_absolute_error(junction_data['Vehicles'], junction_data['Predicted_Vehicles'])
         st.metric(label=f"Current Junction Accuracy", value=f"Off by {j_mae:.1f} cars")
 
-    # --- 7. The Technical Proof (Hidden for Business Judges, Open for Tech Judges) ---
+    # 11. Technical Proof
     with st.expander("🛠️ Technical Details for Data Scientists (Cross-Validation)"):
         st.markdown("""
         **No Data Leakage & Robust Testing** We didn't just test this on one random subset of data. We used Scikit-Learn's `TimeSeriesSplit` to chronologically "walk forward" through the dataset across 4 different time periods. This ensures the model is actually learning the relationships between weather, holidays, and traffic, rather than just memorizing dates.
@@ -249,3 +317,4 @@ if not junction_data.empty:
 
 else:
     st.error("Not enough data.")
+

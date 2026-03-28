@@ -1,15 +1,7 @@
 import streamlit as st 
 import streamlit.components.v1 as components
-
-# Junction coordinates for St. Louis area
-JUNCTION_COORDINATES = {
-    1: {"lat": 38.6270, "lng": -90.1994, "name": "Junction 1 - Downtown"},
-    2: {"lat": 38.6452, "lng": -90.2056, "name": "Junction 2 - Midtown"},
-    3: {"lat": 38.6105, "lng": -90.1823, "name": "Junction 3 - South Grand / Southside"},
-    4: {"lat": 38.6650, "lng": -90.2300, "name": "Junction 4 - North County / Northside"},
-    5: {"lat": 38.6900, "lng": -90.1800, "name": "Junction 5 - Westport / Westside"},
-    6: {"lat": 38.6000, "lng": -90.2100, "name": "Junction 6 - Lafayette Square / South Downtown"},
-}
+import pandas as pd
+import numpy as np
 
 TRAFFIC_COLORS = {
     "🔴 Red (Heavy)":     "#FF0000",
@@ -17,36 +9,40 @@ TRAFFIC_COLORS = {
     "🟢 Green (Clear)":   "#00CC00",
 }
 
-def build_google_map(future_data, selected_junction, api_key):
+def build_google_map(future_data, selected_segment, api_key):
     """
-    Renders an interactive Google Map with traffic markers
-    for each junction using the Maps JavaScript API.
+    Renders an interactive Google Map using DYNAMIC coordinates 
+    from the TrafficTab23 dataset.
     """
 
-    # Build marker data from future predictions
+    # 1. Calculate map center based on the data provided
+    avg_lat = future_data['gps_latitude'].mean()
+    avg_lng = future_data['gps_longitude'].mean()
+
+    # 2. Build marker data dynamically from the unique road segments in the DF
+    # We take the most recent prediction for each unique segment
+    latest_preds = future_data.sort_values('DateTime').groupby('road_segment_id').last().reset_index()
+
     markers_js = ""
-    for junction_id, coords in JUNCTION_COORDINATES.items():
-        junction_future = future_data[future_data['Junction'] == junction_id]
+    for _, row in latest_preds.iterrows():
+        segment_id = row['road_segment_id']
+        lat = row['gps_latitude']
+        lng = row['gps_longitude']
+        traffic_level = row.get('Traffic_Level', '🟢 Green (Clear)')
+        predicted_val = row.get('Predicted_Vehicles', 0)
+        vehicles = int(predicted_val) if pd.notna(predicted_val) and not np.isnan(predicted_val) else 0
+        color = TRAFFIC_COLORS.get(traffic_level, "#808080")
 
-        if not junction_future.empty:
-            next_pred = junction_future.iloc[0]
-            traffic_level = next_pred['Traffic_Level']
-            vehicles = int(next_pred['Predicted_Vehicles'])
-            color = TRAFFIC_COLORS.get(traffic_level, "#808080")
-        else:
-            traffic_level = "No Data"
-            vehicles = 0
-            color = "#808080"
-
-        # Highlight the selected junction with a larger marker
-        scale = 12 if junction_id == selected_junction else 8
-
+        # Highlight the selected segment
+        scale = 12 if segment_id == selected_segment else 8
+        
+        # Add JavaScript for each marker
         markers_js += f"""
         {{
             const marker = new google.maps.Marker({{
-                position: {{ lat: {coords['lat']}, lng: {coords['lng']} }},
+                position: {{ lat: {lat}, lng: {lng} }},
                 map: map,
-                title: "{coords['name']}",
+                title: "Segment {segment_id}",
                 icon: {{
                     path: google.maps.SymbolPath.CIRCLE,
                     scale: {scale},
@@ -60,9 +56,9 @@ def build_google_map(future_data, selected_junction, api_key):
             const infoWindow = new google.maps.InfoWindow({{
                 content: `
                     <div style="font-family: Arial; padding: 8px;">
-                        <h3 style="margin:0; color:#333;">{coords['name']}</h3>
+                        <h3 style="margin:0; color:#333;">Road Segment: {segment_id}</h3>
                         <p style="margin:4px 0;"><b>Status:</b> {traffic_level}</p>
-                        <p style="margin:4px 0;"><b>Predicted Vehicles:</b> {vehicles}/hr</p>
+                        <p style="margin:4px 0;"><b>Predicted Flow:</b> {vehicles} vehicles/hr</p>
                     </div>
                 `
             }});
@@ -73,17 +69,13 @@ def build_google_map(future_data, selected_junction, api_key):
         }}
         """
 
-    # Full Google Maps HTML component
+    # 3. Build the HTML (Center is now dynamic)
     map_html = f"""
     <!DOCTYPE html>
     <html>
     <head>
         <style>
-            #map {{
-                height: 480px;
-                width: 100%;
-                border-radius: 12px;
-            }}
+            #map {{ height: 480px; width: 100%; border-radius: 12px; }}
             body {{ margin: 0; padding: 0; background: transparent; }}
         </style>
     </head>
@@ -92,31 +84,25 @@ def build_google_map(future_data, selected_junction, api_key):
         <script>
             function initMap() {{
                 const map = new google.maps.Map(document.getElementById("map"), {{
-                    zoom: 12,
-                    center: {{ lat: 38.6274, lng: -90.1982 }},
+                    zoom: 11,
+                    center: {{ lat: {avg_lat}, lng: {avg_lng} }},
                     mapTypeId: "roadmap",
                     styles: [
                         {{ featureType: "poi", stylers: [{{ visibility: "off" }}] }},
                         {{ featureType: "transit", stylers: [{{ visibility: "off" }}] }}
                     ]
                 }});
-
                 {markers_js}
             }}
         </script>
-        <script
-            src="https://maps.googleapis.com/maps/api/js?key={api_key}&callback=initMap"
-            async defer>
-        </script>
+        <script src="https://maps.googleapis.com/maps/api/js?key={api_key}&callback=initMap" async defer></script>
     </body>
     </html>
     """
 
     components.html(map_html, height=500)
 
-
 def show_map_legend():
-    """Renders a simple color legend for the map."""
     st.markdown("""
     **Map Legend:**
     🔴 &nbsp; Heavy Traffic &nbsp;&nbsp;

@@ -1,152 +1,101 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from sklearn.metrics import mean_absolute_error
+from datetime import datetime
 
-# Import from our src modules
+# Import from our local src modules
 from src.data_processing import load_and_prep_data, classify_traffic
 from src.model import train_and_evaluate
 from src.visualizations import build_traffic_chart
+from src.maps import build_google_map, show_map_legend
 
-# --- 1. Page Configuration
-st.set_page_config(page_title="Traffic Predictor AI", layout="wide")
-st.title("🚦 Smart City Traffic Prediction Dashboard")
-st.markdown("Predicting future traffic jams by analyzing historical trends, weather, and holidays.")
+# --- 1. Page Configuration ---
+st.set_page_config(page_title="St. Louis Traffic AI", layout="wide", page_icon="🚦")
+st.title("🚦 St. Louis Smart City Traffic Dashboard")
+st.markdown("""
+    **Location:** St. Louis County, MO  
+    Predicting traffic flow using MoDOT-aligned AWT data and Gradient Boosting AI.
+""")
 
-# --- 2. Load Data ---
+# --- 2. Load Data & Model ---
 @st.cache_resource
-def get_data():
-    return load_and_prep_data()
-
-@st.cache_resource
-def get_model(df):
-    return train_and_evaluate(df)
-
-with st.spinner("Preprocessing data & pulling St. Louis weather..."):
-    data = get_data()
-
-with st.spinner("Tuning Hyperparameters & Running Cross-Validation (This may take a minute)..."):
-    test_data, ai_mae, baseline_mae, cv_scores, winning_params = get_model(data)
-
-# --- 3. Sidebar ---
-st.sidebar.header("Time Machine Controls")
-st.sidebar.info("Use these controls to step into the past and see what the AI would have predicted.")
-
-junctions = sorted(data['Junction'].unique())
-selected_junction = st.sidebar.selectbox("1. Select a Traffic Junction", junctions)
-
-junction_data = test_data[test_data['Junction'] == selected_junction].sort_values('DateTime')
-
-if not junction_data.empty:
-    min_date = junction_data['DateTime'].min() + pd.Timedelta(days=3)
-    max_date = junction_data['DateTime'].max() - pd.Timedelta(hours=24)
+def get_data_and_model():
+    # Load the processed St. Louis data
+    # Note: Ensure this path matches your folder structure
+    df = load_and_prep_data("data/stl_traffic_counts.csv")
     
-    selected_date = st.sidebar.slider(
-        "2. Pick the 'Present' Moment", 
-        min_value=min_date.to_pydatetime(), max_value=max_date.to_pydatetime(), 
-        value=min_date.to_pydatetime(), format="YYYY-MM-DD HH:mm"
-    )
-
-    # --- 4. Filter Data ---
-    history_data = junction_data[
-        (junction_data['DateTime'] <= selected_date) & 
-        (junction_data['DateTime'] >= selected_date - pd.Timedelta(hours=72))
-    ]
-    future_data = junction_data[
-        (junction_data['DateTime'] > selected_date) & 
-        (junction_data['DateTime'] <= selected_date + pd.Timedelta(hours=24))
-    ]
-    future_data['Traffic_Level'] = future_data['Predicted_Vehicles'].apply(classify_traffic)
-
-    # --- 5. Context Panel ---
-    st.markdown("---")
-    st.markdown(f"### 🧠 What the AI sees at **{selected_date.strftime('%I:%M %p on %b %d, %Y')}**")
-    st.markdown("Before making a prediction, our model looks at the current environmental and historical context:")
+    # Train the model on the synthesized hourly patterns
+    test_data, ai_mae, baseline_mae, cv_scores, winning_params = train_and_evaluate(df)
     
-    current_context = junction_data[junction_data['DateTime'] == selected_date]
-    if not current_context.empty:
-        ctx = current_context.iloc[0]
-        
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("🌡️ Temperature", f"{ctx['temperature']:.1f} °C")
-        c2.metric("🌧️ Precipitation", f"{ctx['precipitation']:.1f} mm")
-        c3.metric("🎉 Is it a Holiday?", "Yes (Traffic Behavior Changes)" if ctx['is_holiday'] == 1 else "No (Normal Day)")
-        c4.metric("📈 Recent 6-Hour Trend", f"{ctx['rolling_mean_6h']:.1f} vehicles/hr")
+    return df, test_data, ai_mae, baseline_mae, winning_params
 
-    # --- 6. Chart ---
-    st.markdown("### 🔮 The AI's 24-Hour Forecast")
+with st.spinner("Analyzing St. Louis Road Network..."):
+    full_data, test_results, ai_mae, baseline_mae, winning_params = get_data_and_model()
+
+# --- 3. Sidebar Controls ---
+st.sidebar.header("🕹️ Control Panel")
+
+# Select Road Segment (using the 'Onstreet' names from your CSV)
+all_segments = sorted(test_results['road_segment_id'].unique())
+selected_segment = st.sidebar.selectbox("1. Select a Roadway", all_segments)
+
+# Filter results for the specific road
+segment_df = test_results[test_results['road_segment_id'] == selected_segment].sort_values('DateTime')
+
+# Time Slider (March 28, 2026)
+default_time = datetime(2026, 3, 28, 16, 0)
+selected_date = st.sidebar.slider(
+    "2. Set Prediction Time",
+    min_value=datetime(2026, 3, 28, 0, 0),
+    max_value=datetime(2026, 3, 28, 23, 0),
+    value=default_time,
+    format="HH:mm"
+)
+
+# --- 4. Logic: History vs Future ---
+history_data = segment_df[segment_df['DateTime'] <= selected_date]
+future_data = segment_df[segment_df['DateTime'] > selected_date].copy()
+
+# --- 5. Key Metrics Display ---
+st.markdown(f"### 📍 Real-Time Analysis: {selected_segment}")
+current_row = segment_df[segment_df['DateTime'] == selected_date]
+
+if not current_row.empty:
+    row = current_row.iloc[0]
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Current Volume", f"{int(row['vehicle_count'])} cars/hr")
+    m2.metric("AI Prediction", f"{int(row['Predicted_Vehicles'])} cars/hr")
+    m3.metric("Status", row['Traffic_Level'])
+    m4.metric("Coordinates", f"{row['gps_latitude']:.3f}, {row['gps_longitude']:.3f}")
+
+# --- 6. Visualization & Map ---
+col_left, col_right = st.columns([2, 1])
+
+with col_left:
+    st.subheader("🔮 24-Hour Traffic Forecast")
     fig = build_traffic_chart(history_data, future_data, selected_date)
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- 7. Immediate Prediction ---
-    if not future_data.empty:
-        next_hour = future_data.iloc[0]
-        st.markdown("### 🚨 Immediate Traffic Prediction")
-        st.metric(
-            label="Next Hour Traffic",
-            value=classify_traffic(next_hour['Predicted_Vehicles'])
-        )
-
-    # --- 8. Next 3-Hour Predictions ---
-    st.markdown("###🚦Traffic Prediction (Next 3 Hours)")
-    future_preview = future_data.head(3)
-    if future_preview.empty:
-        st.info("No future data available for this selection.")
+with col_right:
+    st.subheader("🗺️ Live Spatial View")
+    show_map_legend()
+    
+    api_key = st.secrets.get("GOOGLE_MAPS_API_KEY")
+    if api_key:
+        # We now filter the FULL results for the specific hour selected
+        # This ensures markers are visible at any time of day
+        all_segments_at_time = test_results[test_results['DateTime'].dt.hour == selected_date.hour]
+        build_google_map(all_segments_at_time, selected_segment, api_key)
     else:
-        for _,row in future_preview.iterrows():
-            traffic_level = classify_traffic(row['Predicted_Vehicles'])
-            time_str = row['DateTime'].strftime('%I:%M %p')
+        st.info("💡 Pro Tip: Add a Google Maps API key to secrets.toml.")
 
-            if "Red" in traffic_level:
-                st.error(f"{time_str} → {traffic_level}")
-            elif "Yellow" in traffic_level:
-                st.warning(f"{time_str} → {traffic_level}")
-            else:
-                st.success(f"{time_str} → {traffic_level}")
-
-            st.write(
-                f"{row['DateTime'].strftime('%I:%M %p')} → {classify_traffic(row['Predicted_Vehicles'])}"
-            )
-
-    # --- 9. Best Travel Time ---
-    if not future_preview.empty:
-        best_time = future_preview.loc[
-            future_preview['Predicted_Vehicles'].idxmin()
-        ]
-        st.markdown("---")
-        st.success(
-            f"🚗 Best time to travel: **{best_time['DateTime'].strftime('%I:%M %p')}** "
-            f"({classify_traffic(best_time['Predicted_Vehicles'])})"
-        )
-
-    # --- 10. Business Metrics ---
-    st.markdown("---")
-    st.markdown("### 🏆 Model Performance: How much better is this than a human guess?")
-    st.info("To prove our AI is useful, we compared it against a 'Naive Human Guess' (assuming tomorrow's traffic will just be exactly the same as today's traffic).")
-    
-    improvement_pct = ((baseline_mae - ai_mae) / baseline_mae) * 100
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric(label="Human Guess Error Rate", value=f"Off by {baseline_mae:.1f} cars", help="On average, a simple human guess is wrong by this many vehicles per hour.")
-    with col2:
-        st.metric(label="AI Model Error Rate", value=f"Off by {ai_mae:.1f} cars", delta=f"AI is {improvement_pct:.1f}% more accurate", delta_color="inverse")
-    with col3:
-        j_mae = mean_absolute_error(junction_data['Vehicles'], junction_data['Predicted_Vehicles'])
-        st.metric(label=f"Current Junction Accuracy", value=f"Off by {j_mae:.1f} cars")
-
-    # --- 11. Technical Proof ---
-    with st.expander("🛠️ Technical Details for Data Scientists (Cross-Validation)"):
-        st.markdown("""
-        **No Data Leakage & Robust Testing** We didn't just test this on one random subset of data. We used Scikit-Learn's `TimeSeriesSplit` to chronologically "walk forward" through the dataset across 4 different time periods. This ensures the model is actually learning the relationships between weather, holidays, and traffic, rather than just memorizing dates.
-        """)
-        cv_df = pd.DataFrame({
-            "Validation Window": ["Fold 1 (Oldest Data)", "Fold 2", "Fold 3", "Fold 4 (Newest Data)"],
-            "Average Error (MAE)": [f"{score:.2f} vehicles" for score in cv_scores]
-        })
-        st.table(cv_df)
-        st.markdown("**Optimal Hyperparameters Found via RandomizedSearchCV:**")
-        st.json(winning_params)
-
-else:
-    st.error("Not enough data.")
-
+# --- 7. Model Insights ---
+st.markdown("---")
+with st.expander("📊 AI Performance & Technical Details"):
+    c1, c2 = st.columns(2)
+    improvement = ((baseline_mae - ai_mae) / baseline_mae) * 100 if baseline_mae != 0 else 0
+    c1.write(f"**Model Accuracy (MAE):** {ai_mae:.2f} vehicles")
+    c1.write(f"**Improvement over Baseline:** {improvement:.1f}%")
+    c2.write("**Winning AI Parameters:**")
+    c2.json(winning_params)

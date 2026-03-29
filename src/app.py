@@ -22,7 +22,8 @@ st.markdown("""
 @st.cache_resource
 def get_data_and_model():
     # Load the processed St. Louis data
-    df = load_and_prep_data("/workspaces/traffic-predictor/data/stl_traffic_counts.csv")
+    # Note: Ensure this path matches your folder structure
+    df = load_and_prep_data("data/stl_traffic_counts.csv")
     
     # Train the model on the synthesized hourly patterns
     test_data, ai_mae, baseline_mae, cv_scores, winning_params = train_and_evaluate(df)
@@ -43,7 +44,6 @@ selected_segment = st.sidebar.selectbox("1. Select a Roadway", all_segments)
 segment_df = test_results[test_results['road_segment_id'] == selected_segment].sort_values('DateTime')
 
 # Time Slider (March 28, 2026)
-# We set the default to 4:00 PM (16:00) to show the evening rush hour
 default_time = datetime(2026, 3, 28, 16, 0)
 selected_date = st.sidebar.slider(
     "2. Set Prediction Time",
@@ -78,13 +78,15 @@ with col_left:
     st.plotly_chart(fig, use_container_width=True)
 
 with col_right:
-    st.subheader("🗺️ Geographic View")
+    st.subheader("🗺️ Live Spatial View")
     show_map_legend()
-    # Pull Google Maps API Key from secrets
+    
     api_key = st.secrets.get("GOOGLE_MAPS_API_KEY")
     if api_key:
-        # Pass future data to see upcoming traffic on the map
-        build_google_map(future_data, selected_segment, api_key)
+        # FILTER: Show all road segments at the EXACT time selected on the slider
+        # This makes the map markers change color as you move the slider!
+        all_segments_at_time = test_results[test_results['DateTime'] == selected_date]
+        build_google_map(all_segments_at_time, selected_segment, api_key)
     else:
         st.info("💡 Pro Tip: Add a Google Maps API key to secrets.toml to enable the interactive map.")
 

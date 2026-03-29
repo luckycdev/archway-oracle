@@ -19,18 +19,21 @@ def build_google_map(df, selected_segment, api_key, secondary_segment=None):
     if df.empty:
         st.warning("No spatial data to display.")
         return
-
-    # Filter out trail dots if they exist to keep the 'Classic' look
-    if 'is_trail_dot' in df.columns:
-        display_df = df[df['is_trail_dot'] == False].copy()
+      
+    target_row = df[df['road_segment_id'] == selected_segment]
+    if not target_row.empty:
+        # Center the map EXACTLY on the selected street
+        center_lat = target_row['gps_latitude'].iloc[0]
+        center_lon = target_row['gps_longitude'].iloc[0]
+        zoom_level = 15  # Zoomed in close!
     else:
-        display_df = df.copy()
-
-    center_lat = display_df['gps_latitude'].mean()
-    center_lon = display_df['gps_longitude'].mean()
+        # Fallback: Center on St. Louis if something goes wrong
+        center_lat = df['gps_latitude'].mean()
+        center_lon = df['gps_longitude'].mean()
+        zoom_level = {zoom_level}
 
     markers_js = ""
-    for _, row in display_df.iterrows():
+    for _, row in df.iterrows():
         color = "green"
         traffic_lvl = str(row.get('Traffic_Level', ''))
         if "Red" in traffic_lvl: color = "red"
@@ -67,7 +70,7 @@ def build_google_map(df, selected_segment, api_key, secondary_segment=None):
           function initMap() {{
             const center = {{ lat: {center_lat}, lng: {center_lon} }};
             const map = new google.maps.Map(document.getElementById("map"), {{
-              zoom: 12,
+              zoom: {zoom_level},
               center: center,
               styles: [
                 {{ "elementType": "geometry", "stylers": [{{ "color": "#242f3e" }}] }},

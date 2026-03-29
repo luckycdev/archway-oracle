@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 import holidays
+import requests
+from datetime import datetime, timedelta
 
 def classify_traffic(volume):
     if volume > 2000: return "🔴 Red (Heavy)"
@@ -47,19 +49,86 @@ def load_and_prep_data(filepath="data/stl_traffic_counts.csv"):
         18: 0.06, 19: 0.04, 20: 0.03, 21: 0.025, 22: 0.02, 23: 0.015
     }
     
+    today_date = datetime.now().date()
+    dates_to_generate = [
+        today_date - timedelta(days=1), # Yesterday (gets sacrificed to dropna)
+        today_date,                     # Today (shows on dashboard)
+        today_date + timedelta(days=1)  # Tomorrow (future forecasting)
+    ]
+    
     hourly_dfs = []
-    for hr, weight in weights.items():
-        temp = df.copy()
-        temp['hour'] = hr
-        # Use 'AWT' (Average Weekly Traffic) from your CSV
-        temp['vehicle_count'] = (temp['AWT'] * weight).astype(int)
-        temp['timestamp'] = pd.Timestamp('2026-03-28') + pd.to_timedelta(hr, unit='h')
-        hourly_dfs.append(temp)
+    for d in dates_to_generate: # Loop through all 3 days
+        for hr, weight in weights.items():
+            temp = df.copy()
+            temp['hour'] = hr
+            base_volume = temp['AWT'] * weight
+            noise_multiplier = np.random.uniform(0.85, 1.15, size=len(temp))
+            temp['vehicle_count'] = (base_volume * noise_multiplier).astype(int)
+            temp['timestamp'] = pd.Timestamp(d) + pd.to_timedelta(hr, unit='h')
+            hourly_dfs.append(temp)
     
     df = pd.concat(hourly_dfs).reset_index(drop=True)
 
-    # 6. Pipeline
+    # 6. Weather engine
+    # Default values
     df = add_time_features(df)
+    df['temperature'] = 22.0
+    df['precipitation'] = 0.0
+
+    # Simulate a cold, rainy/snowy morning (6A M - 10 AM)
+    # This gives the AI something to "learn" from
+    morning_mask = (df['hour'] >= 6) & (df['hour'] <= 10)
+    df.loc[morning_mask, 'precipitation'] = 4.5
+    df.loc[morning_mask, 'temperature'] = -2.0  # Cold enough for snow
+    
+    start_date = df['DateTime'].min().strftime('%Y-%m-%d')
+    end_date = df['DateTime'].max().strftime('%Y-%m-%d')
+    
+    # 6. Weather engine (API Integration)
+    LATITUDE = 38.6274
+    LONGITUDE = -90.1982
+    
+    start_date = dates_to_generate[0].strftime('%Y-%m-%d')
+    end_date = dates_to_generate[-1].strftime('%Y-%m-%d')
+    
+    weather_url = (
+        f"https://api.open-meteo.com/v1/forecast?"
+        f"latitude={LATITUDE}&longitude={LONGITUDE}&"
+        f"start_date={start_date}&end_date={end_date}&"
+        f"hourly=temperature_2m,precipitation,cloud_cover&timezone=auto" # Added cloud_cover to the request
+    )
+    
+    try:
+        response = requests.get(weather_url, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            weather_df = pd.DataFrame({
+                'DateTime': pd.to_datetime(data['hourly']['time']),
+                'temp_api': data['hourly']['temperature_2m'],
+                'precip_api': data['hourly']['precipitation'],
+                'cloud_api': data['hourly']['cloud_cover']
+            })
+            # Merge and use the API values
+            df = pd.merge(df, weather_df, on='DateTime', how='left')
+            df['temperature'] = df['temp_api'].fillna(15.0)
+            df['precipitation'] = df['precip_api'].fillna(0.0)
+            df['cloud_cover'] = df['cloud_api'].fillna(0.0)
+            # Drop the temporary helper columns
+            df = df.drop(columns=['temp_api', 'precip_api', 'cloud_api'])
+        else:
+            raise ValueError("API Offline")
+    except Exception:
+        # Robust Fallbacks
+        df['temperature'] = 15.0
+        df['precipitation'] = 0.0
+        df['cloud_cover'] = 0.0
+
+    # Logic for Rain/Snow/Glare (Apply this AFTER the merge)
+    df['is_snowing'] = ((df['precipitation'] > 0) & (df['temperature'] <= 0)).astype(np.int8)
+    df['is_raining'] = ((df['precipitation'] > 0) & (df['temperature'] > 0)).astype(np.int8)
+    
+    glare_hours = [7, 8, 17, 18]
+    df['sun_glare'] = ((df['cloud_cover'] < 30) & (df['hour'].isin(glare_hours))).astype(np.int8)
     
     # Add simple holiday check
     us_holidays = holidays.US(years=[2026])

@@ -1,4 +1,6 @@
 import plotly.graph_objects as go
+import plotly.express as px
+import pandas as pd
 
 def build_traffic_chart(history_data, future_data, selected_date):
     fig = go.Figure()
@@ -39,15 +41,61 @@ def build_traffic_chart(history_data, future_data, selected_date):
         x=v_line_x, y=1, yref="paper", text="Current Time",
         showarrow=False, font=dict(color="white"), xanchor="right", xshift=-5
     )
+    
+    window_start = selected_date - pd.Timedelta(hours=12)
+    window_end = selected_date + pd.Timedelta(hours=24)
 
     fig.update_layout(
         template="plotly_dark",
         height=400,
         margin=dict(l=20, r=20, t=50, b=20),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        xaxis=dict(title="Time of Day", tickformat="%I %p"),
+        
+        xaxis=dict(
+            title="Time of Day", 
+            tickformat="%I %p",
+            range=[window_start, window_end] 
+        ),
+        
         yaxis=dict(title="Vehicles per Hour"),
         hovermode="x unified"
     )
 
+    return fig
+
+def build_feature_importance_chart(feature_importances):
+    """
+    Creates a horizontal bar chart of feature importances.
+    """
+    # 1. Convert the dictionary to a DataFrame
+    # This ensures the columns are named exactly 'Feature' and 'Importance'
+    fi_df = pd.DataFrame({
+        'Feature': list(feature_importances.keys()),
+        'Importance': list(feature_importances.values())
+    })
+
+    # 2. Sort so the most important is at the top
+    fi_df = fi_df.sort_values(by='Importance', ascending=True)
+
+    # 3. Build the chart
+    fig = px.bar(
+        fi_df,
+        x='Importance',  # Must match the key in the dictionary above
+        y='Feature',     # Must match the key in the dictionary above
+        orientation='h',
+        title="<b>AI Decision Factors</b>",
+        labels={'Importance': 'Impact Score', 'Feature': 'Factor'},
+        template="plotly_dark",
+        color='Importance',
+        color_continuous_scale='Viridis'
+    )
+
+    # 4. Clean up the layout for the sidebar/column
+    fig.update_layout(
+        showlegend=False,
+        height=300,
+        margin=dict(l=10, r=10, t=40, b=10),
+        coloraxis_showscale=False
+    )
+    
     return fig

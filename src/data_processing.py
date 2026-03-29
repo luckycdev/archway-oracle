@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 import holidays
+import requests
+from datetime import datetime, timedelta
 
 def classify_traffic(volume):
     if volume > 2000: return "🔴 Red (Heavy)"
@@ -47,19 +49,69 @@ def load_and_prep_data(filepath="data/stl_traffic_counts.csv"):
         18: 0.06, 19: 0.04, 20: 0.03, 21: 0.025, 22: 0.02, 23: 0.015
     }
     
+    today_date = datetime.now().date()
+    dates_to_generate = [
+        today_date - timedelta(days=1), # Yesterday (gets sacrificed to dropna)
+        today_date,                     # Today (shows on dashboard)
+        today_date + timedelta(days=1)  # Tomorrow (future forecasting)
+    ]
+    
     hourly_dfs = []
-    for hr, weight in weights.items():
-        temp = df.copy()
-        temp['hour'] = hr
-        # Use 'AWT' (Average Weekly Traffic) from your CSV
-        temp['vehicle_count'] = (temp['AWT'] * weight).astype(int)
-        temp['timestamp'] = pd.Timestamp('2026-03-28') + pd.to_timedelta(hr, unit='h')
-        hourly_dfs.append(temp)
+    for d in dates_to_generate: # Loop through all 3 days
+        for hr, weight in weights.items():
+            temp = df.copy()
+            temp['hour'] = hr
+            base_volume = temp['AWT'] * weight
+            noise_multiplier = np.random.uniform(0.85, 1.15, size=len(temp))
+            temp['vehicle_count'] = (base_volume * noise_multiplier).astype(int)
+            temp['timestamp'] = pd.Timestamp(d) + pd.to_timedelta(hr, unit='h')
+            hourly_dfs.append(temp)
     
     df = pd.concat(hourly_dfs).reset_index(drop=True)
 
     # 6. Pipeline
     df = add_time_features(df)
+    
+    start_date = df['DateTime'].min().strftime('%Y-%m-%d')
+    end_date = df['DateTime'].max().strftime('%Y-%m-%d')
+    
+    LATITUDE = 38.6274
+    LONGITUDE = -90.1982
+    
+    # Using the Forecast API instead of Archive because the date is 2026
+    weather_url = (
+        f"https://api.open-meteo.com/v1/forecast?"
+        f"latitude={LATITUDE}&longitude={LONGITUDE}&"
+        f"start_date={start_date}&end_date={end_date}&"
+        f"hourly=temperature_2m,precipitation&timezone=auto"
+    )
+    
+    try:
+        response = requests.get(weather_url)
+        if response.status_code == 200:
+            weather_data = response.json()
+            weather_df = pd.DataFrame({
+                'DateTime': pd.to_datetime(weather_data['hourly']['time']),
+                'temperature': weather_data['hourly']['temperature_2m'],
+                'precipitation': weather_data['hourly']['precipitation'],
+                'cloud_cover': weather_data['hourly']['cloud_cover']
+            })
+            df = pd.merge(df, weather_df, on='DateTime', how='left')
+            # Fill missing data safely
+            df['temperature'] = df['temperature'].fillna(df['temperature'].mean())
+            df['precipitation'] = df['precipitation'].fillna(0)
+            df['cloud_cover'] = df['cloud_cover'].fillna(100)
+        else:
+            df['temperature'] = 15.0 # Fallback 
+            df['precipitation'] = 0.0
+            df['cloud_cover'] = 100.0
+    except Exception:
+        df['temperature'] = 15.0
+        df['precipitation'] = 0.0
+        df['cloud_cover'] = 100.0
+    
+    glare_hours = [7, 8, 17, 18]
+    df['sun_glare'] = ((df['cloud_cover'] < 30) & (df['hour'].isin(glare_hours))).astype(np.int8)
     
     # Add simple holiday check
     us_holidays = holidays.US(years=[2026])

@@ -3,12 +3,14 @@ import numpy as np
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
 from sklearn.metrics import mean_absolute_error
+from sklearn.inspection import permutation_importance
 
 # 1. Define features - Road ID must be handled separately
 FEATURES = [
     'gps_latitude', 'gps_longitude', 
     'hour', 'hour_sin', 'hour_cos', 
     'day', 'is_weekend', 'is_holiday',
+    'temperature', 'precipitation', 'cloud_cover', 'sun_glare',
     'lag1', 'lag2', 'rolling_mean_short'
 ]
 CAT_FEATURES = ['road_segment_id']
@@ -33,6 +35,13 @@ def train_and_evaluate(df):
     model = HistGradientBoostingRegressor(categorical_features=cat_mask, random_state=42)
     model.fit(X_train, y_train)
     
+    result = permutation_importance(model, X_test, y_test, n_repeats=5, random_state=42)
+    
+    feature_importances = pd.DataFrame({
+        'Feature': X_test.columns,
+        'Importance': result.importances_mean
+    }).sort_values(by='Importance', ascending=True)
+    
     # --- FIX: Predict for the WHOLE day so the map works 24/7 ---
     X_all = df[CAT_FEATURES + FEATURES]
     df['Predicted_Vehicles'] = model.predict(X_all).clip(min=0)
@@ -42,11 +51,11 @@ def train_and_evaluate(df):
     ai_mae = mean_absolute_error(y_test, test_preds)
     baseline_mae = mean_absolute_error(y_test, X_test['lag1'])
     
-    from src.data_processing import classify_traffic
+    from data_processing import classify_traffic
     df['Traffic_Level'] = df['Predicted_Vehicles'].apply(classify_traffic)
     
     # Return the FULL dataframe so the map/slider work for all hours
-    return df, ai_mae, baseline_mae, {}, {}
+    return df, ai_mae, baseline_mae, feature_importances, {}
 
 def test_results_processing(df):
     # Ensure no negative predictions (AI can sometimes guess -5 cars)

@@ -1,4 +1,5 @@
 import plotly.graph_objects as go
+import pandas as pd
 
 def build_traffic_chart(history_data, future_data, selected_date):
     fig = go.Figure()
@@ -39,15 +40,42 @@ def build_traffic_chart(history_data, future_data, selected_date):
         x=v_line_x, y=1, yref="paper", text="Current Time",
         showarrow=False, font=dict(color="white"), xanchor="right", xshift=-5
     )
+    
+    window_start = selected_date - pd.Timedelta(hours=12)
+    window_end = selected_date + pd.Timedelta(hours=24)
 
     fig.update_layout(
         template="plotly_dark",
         height=400,
         margin=dict(l=20, r=20, t=50, b=20),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        xaxis=dict(title="Time of Day", tickformat="%I %p"),
+        
+        xaxis=dict(
+            title="Time of Day", 
+            tickformat="%I %p",
+            range=[window_start, window_end] 
+        ),
+        
         yaxis=dict(title="Vehicles per Hour"),
         hovermode="x unified"
     )
 
+    return fig
+
+def build_feature_importance_chart(fi_df):
+    fig = go.Figure(go.Bar(
+        x=fi_df['Importance'],
+        y=fi_df['Feature'],
+        orientation='h',
+        marker_color='#FF4B4B'
+    ))
+    
+    fig.update_layout(
+        template="plotly_dark",
+        height=350,
+        margin=dict(l=20, r=20, t=30, b=20),
+        xaxis_title="Impact on Model Accuracy",
+        yaxis_title="",
+        xaxis=dict(showgrid=True, gridcolor='rgba(255, 255, 255, 0.1)')
+    )
     return fig

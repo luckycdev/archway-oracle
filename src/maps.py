@@ -30,7 +30,7 @@ def build_google_map(df, selected_segment, api_key, secondary_segment=None):
         # Fallback: Center on St. Louis if something goes wrong
         center_lat = df['gps_latitude'].mean()
         center_lon = df['gps_longitude'].mean()
-        zoom_level = {zoom_level}
+        zoom_level = 12
 
     markers_js = ""
     for _, row in df.iterrows():

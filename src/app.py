@@ -9,6 +9,7 @@ from src.data_processing import load_and_prep_data, classify_traffic
 from src.model import train_and_evaluate
 from src.visualizations import build_traffic_chart
 from src.maps import build_google_map, show_map_legend
+from src.engine import get_best_time_to_leave
 
 # --- 1. Page Configuration ---
 st.set_page_config(page_title="St. Louis Traffic AI", layout="wide", page_icon="🚦")
@@ -74,6 +75,18 @@ if not current_row.empty:
             m4.metric(f"vs {secondary_segment}", f"{int(sec_row['vehicle_count'])}", delta=diff, delta_color="inverse")
     else:
         m4.metric("Coordinates", f"{row['gps_latitude']:.3f}, {row['gps_longitude']:.3f}")
+
+# Best time to leave recommendation
+st.markdown("---")
+recommendation = get_best_time_to_leave(future_data)
+
+if recommendation and recommendation['reduction'] > 50: # Only suggest if saving > 50 cars
+    st.success(f"""
+        💡 **AI Commute Tip:** Traffic on **{selected_segment}** is trending down.
+        Leaving at **{recommendation['time']}** could save you from roughly **{recommendation['reduction']}** vehicles on the road.
+        """)
+elif recommendation:
+    st.info(f"✨ **Note:** Traffic is currently stable. No significant drops expected in the next 3 hours.")
 
 # --- 6. Map & Visualization ---
 st.subheader("🗺️ Live Spatial View")

@@ -70,13 +70,31 @@ current_row = segment_df[segment_df['DateTime'] == selected_date]
 
 if not current_row.empty:
     row = current_row.iloc[0]
-    
-    # 2x2 Grid for Environment & Traffic Pulse
     m1, m2, m3, m4 = st.columns(4)
+    
+    # 1. Traffic Volume
     m1.metric("Current Vol", f"{int(row['vehicle_count'])}/hr")
-    m2.metric("AI Forecast", f"{int(row['Predicted_Vehicles'])}/hr")
-    m3.metric("Temp", f"{row.get('temperature', 20):.1f}°C") # .get for safety
-    m4.metric("Glare Risk", "⚠️ High" if row.get('sun_glare', 0) == 1 else "Low")
+    
+    # 2. AI Prediction with Delta (Shows how much the AI differs from reality)
+    ai_diff = int(row['Predicted_Vehicles'] - row['vehicle_count'])
+    m2.metric("AI Forecast", f"{int(row['Predicted_Vehicles'])}/hr", delta=ai_diff, delta_color="off")
+    
+    # 3. Dynamic Weather Metric
+    temp = row.get('temperature', 20)
+    precip = row.get('precipitation', 0)
+    
+    if row.get('is_snowing') == 1:
+        m3.metric("Weather", "❄️ Snow", delta=f"{temp:.1f}°C", delta_color="inverse")
+    elif row.get('is_raining') == 1:
+        m3.metric("Weather", "🌧️ Rain", delta=f"{temp:.1f}°C", delta_color="normal")
+    else:
+        m3.metric("Weather", "☀️ Clear", delta=f"{temp:.1f}°C", delta_color="off")
+
+    # 4. Glare Risk Metric
+    if row.get('sun_glare') == 1:
+        m4.metric("Visibility", "⚠️ High Glare", delta="Use Caution", delta_color="inverse")
+    else:
+        m4.metric("Visibility", "Good", delta="Normal")
 
 # Best time to leave recommendation
 recommendation = get_best_time_to_leave(future_data)

@@ -69,46 +69,63 @@ def load_and_prep_data(filepath="data/stl_traffic_counts.csv"):
     
     df = pd.concat(hourly_dfs).reset_index(drop=True)
 
-    # 6. Pipeline
+    # 6. Weather engine
+    # Default values
     df = add_time_features(df)
+    df['temperature'] = 22.0
+    df['precipitation'] = 0.0
+
+    # Simulate a cold, rainy/snowy morning (6A M - 10 AM)
+    # This gives the AI something to "learn" from
+    morning_mask = (df['hour'] >= 6) & (df['hour'] <= 10)
+    df.loc[morning_mask, 'precipitation'] = 4.5
+    df.loc[morning_mask, 'temperature'] = -2.0  # Cold enough for snow
     
     start_date = df['DateTime'].min().strftime('%Y-%m-%d')
     end_date = df['DateTime'].max().strftime('%Y-%m-%d')
     
+    # 6. Weather engine (API Integration)
     LATITUDE = 38.6274
     LONGITUDE = -90.1982
     
-    # Using the Forecast API instead of Archive because the date is 2026
+    start_date = dates_to_generate[0].strftime('%Y-%m-%d')
+    end_date = dates_to_generate[-1].strftime('%Y-%m-%d')
+    
     weather_url = (
         f"https://api.open-meteo.com/v1/forecast?"
         f"latitude={LATITUDE}&longitude={LONGITUDE}&"
         f"start_date={start_date}&end_date={end_date}&"
-        f"hourly=temperature_2m,precipitation&timezone=auto"
+        f"hourly=temperature_2m,precipitation,cloud_cover&timezone=auto" # Added cloud_cover to the request
     )
     
     try:
-        response = requests.get(weather_url)
+        response = requests.get(weather_url, timeout=5)
         if response.status_code == 200:
-            weather_data = response.json()
+            data = response.json()
             weather_df = pd.DataFrame({
-                'DateTime': pd.to_datetime(weather_data['hourly']['time']),
-                'temperature': weather_data['hourly']['temperature_2m'],
-                'precipitation': weather_data['hourly']['precipitation'],
-                'cloud_cover': weather_data['hourly']['cloud_cover']
+                'DateTime': pd.to_datetime(data['hourly']['time']),
+                'temp_api': data['hourly']['temperature_2m'],
+                'precip_api': data['hourly']['precipitation'],
+                'cloud_api': data['hourly']['cloud_cover']
             })
+            # Merge and use the API values
             df = pd.merge(df, weather_df, on='DateTime', how='left')
-            # Fill missing data safely
-            df['temperature'] = df['temperature'].fillna(df['temperature'].mean())
-            df['precipitation'] = df['precipitation'].fillna(0)
-            df['cloud_cover'] = df['cloud_cover'].fillna(100)
+            df['temperature'] = df['temp_api'].fillna(15.0)
+            df['precipitation'] = df['precip_api'].fillna(0.0)
+            df['cloud_cover'] = df['cloud_api'].fillna(0.0)
+            # Drop the temporary helper columns
+            df = df.drop(columns=['temp_api', 'precip_api', 'cloud_api'])
         else:
-            df['temperature'] = 15.0 # Fallback 
-            df['precipitation'] = 0.0
-            df['cloud_cover'] = 100.0
+            raise ValueError("API Offline")
     except Exception:
+        # Robust Fallbacks
         df['temperature'] = 15.0
         df['precipitation'] = 0.0
-        df['cloud_cover'] = 100.0
+        df['cloud_cover'] = 0.0
+
+    # Logic for Rain/Snow/Glare (Apply this AFTER the merge)
+    df['is_snowing'] = ((df['precipitation'] > 0) & (df['temperature'] <= 0)).astype(np.int8)
+    df['is_raining'] = ((df['precipitation'] > 0) & (df['temperature'] > 0)).astype(np.int8)
     
     glare_hours = [7, 8, 17, 18]
     df['sun_glare'] = ((df['cloud_cover'] < 30) & (df['hour'].isin(glare_hours))).astype(np.int8)

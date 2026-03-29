@@ -43,21 +43,33 @@ if compare_on:
         [s for s in all_segments if s != selected_segment]
     )
 
-# Time Logic & Slider (Fixed Syntax)
-now = datetime.now()
-start_of_today = datetime(now.year, now.month, now.day, 0, 0)
-end_of_today = datetime(now.year, now.month, now.day, 23, 0)
-current_hour_val = datetime(now.year, now.month, now.day, now.hour, 0)
+st.sidebar.markdown("---")
 
-st.sidebar.markdown(f"**📅 Date:** {now.strftime('%B %d, %Y')}")
-selected_date = st.sidebar.slider(
-    "2. Set Prediction Time",
-    min_value=start_of_today,
-    max_value=end_of_today,
-    value=current_hour_val,
-    step=timedelta(hours=1),
-    format="h:mm A"
+st.sidebar.subheader("📅 Temporal Settings")
+
+# Limits the calendar to the 3 days of data we generated
+min_date = datetime.now().date() - timedelta(days=1)
+max_date = datetime.now().date() + timedelta(days=1)
+
+selected_day = st.sidebar.date_input(
+    "Select Date",
+    value=datetime.now().date(),
+    min_value=min_date,
+    max_value=max_date
 )
+
+selected_hour = st.sidebar.slider(
+    "Set Prediction Hour",
+    min_value=0,
+    max_value=23,
+    value=datetime.now().hour,
+    format="%d:00"
+)
+
+# Combine Day and Hour into one DateTime object for filtering
+selected_date = datetime.combine(selected_day, datetime.min.time()) + timedelta(hours=selected_hour)
+
+st.sidebar.info(f"📍 Viewing: **{selected_date.strftime('%a, %b %d at %I:%M %p')}**")
 
 # --- 4. Logic: Data Filtering ---
 segment_df = test_results[test_results['road_segment_id'] == selected_segment].sort_values('DateTime')
@@ -127,7 +139,7 @@ show_map_legend()
 
 api_key = st.secrets.get("GOOGLE_MAPS_API_KEY")
 if api_key:
-    all_segments_at_time = test_results[test_results['DateTime'].dt.hour == selected_date.hour]
+    all_segments_at_time = test_results[test_results['DateTime'] == selected_date]
     build_google_map(all_segments_at_time, selected_segment, api_key, secondary_segment) 
 else:
     st.info("💡 Pro Tip: Add a Google Maps API key to secrets.toml.")

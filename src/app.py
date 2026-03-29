@@ -13,8 +13,8 @@ from src.maps import build_google_map, show_map_legend
 from src.engine import get_best_time_to_leave
 
 # --- 1. Page Configuration ---
-st.set_page_config(page_title="St. Louis Traffic AI", layout="wide", page_icon="🚦")
-st.title("🚦 St. Louis Smart City Traffic Dashboard")
+st.set_page_config(page_title="ArchWay AI: St. Louis Predictive Traffic Intelligence", layout="wide", page_icon="🚗")
+st.title("🚗 ArchWay AI: St. Louis Predictive Traffic Intelligence")
 
 # --- 2. Load Data & Model ---
 @st.cache_resource

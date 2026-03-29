@@ -83,12 +83,12 @@ with col_right:
     
     api_key = st.secrets.get("GOOGLE_MAPS_API_KEY")
     if api_key:
-        # FILTER: Show all road segments at the EXACT time selected on the slider
-        # This makes the map markers change color as you move the slider!
-        all_segments_at_time = test_results[test_results['DateTime'] == selected_date]
+        # We now filter the FULL results for the specific hour selected
+        # This ensures markers are visible at any time of day
+        all_segments_at_time = test_results[test_results['DateTime'].dt.hour == selected_date.hour]
         build_google_map(all_segments_at_time, selected_segment, api_key)
     else:
-        st.info("💡 Pro Tip: Add a Google Maps API key to secrets.toml to enable the interactive map.")
+        st.info("💡 Pro Tip: Add a Google Maps API key to secrets.toml.")
 
 # --- 7. Model Insights ---
 st.markdown("---")

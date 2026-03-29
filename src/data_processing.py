@@ -34,10 +34,10 @@ def load_and_prep_data(filepath="data/stl_traffic_counts.csv"):
     # 3. Filter for recent data
     df = df[df['Year'] >= 2023].copy()
 
-    # 4. FIX: Use 'x' and 'y' directly (from your CSV) for Coordinate Conversion
-    # This math converts St. Louis State Plane coordinates to Lat/Long
-    df['gps_latitude'] = 38.627 + (df['y'] - 1000059) / 364000
-    df['gps_longitude'] = -90.199 + (df['x'] - 837675) / 288000
+    # 4. Accurate Coordinate Conversion (State Plane Feet to Lat/Long)
+    # Calibrated for St. Louis County (Des Peres, Kirkwood, Mehlville area)
+    df['gps_latitude'] = 35.8134 + (df['y'] * 0.000002778)
+    df['gps_longitude'] = -93.3488 + (df['x'] * 0.000003465)
     
     # 5. Synthesize Hourly Data
     weights = {

@@ -15,64 +15,38 @@ CAT_FEATURES = ['road_segment_id']
 
 def train_and_evaluate(df):
     df = df.copy()
-    
-    # CRITICAL: Convert road names to 'category' type
     df['road_segment_id'] = df['road_segment_id'].astype('category')
     
-    # Sort by time for a valid forecast split
+    # Sort and Split
     df = df.sort_values('DateTime')
     split_idx = int(len(df) * 0.8)
     train_df = df.iloc[:split_idx]
     test_df = df.iloc[split_idx:]
     
-    # FIX: Put Categorical column FIRST so index 0 is the category
     X_train = train_df[CAT_FEATURES + FEATURES]
     y_train = train_df['vehicle_count']
     X_test = test_df[CAT_FEATURES + FEATURES]
     y_test = test_df['vehicle_count']
     
-    # Define the mask: True for the first column (road_id), False for the rest (numeric)
-    # Total columns = 1 (cat) + 11 (numeric) = 12
+    # Train Model
     cat_mask = [True] + [False] * len(FEATURES)
-
-    # --- Model Setup ---
-    model = HistGradientBoostingRegressor(
-        categorical_features=cat_mask,
-        random_state=42
-    )
+    model = HistGradientBoostingRegressor(categorical_features=cat_mask, random_state=42)
+    model.fit(X_train, y_train)
     
-    # Simplified search grid for stability
-    param_distributions = {
-        'max_iter': [50, 100],
-        'learning_rate': [0.1],
-        'max_depth': [3, 5]
-    }
+    # --- FIX: Predict for the WHOLE day so the map works 24/7 ---
+    X_all = df[CAT_FEATURES + FEATURES]
+    df['Predicted_Vehicles'] = model.predict(X_all).clip(min=0)
     
-    search = RandomizedSearchCV(
-        model, 
-        param_distributions, 
-        n_iter=3, 
-        cv=TimeSeriesSplit(n_splits=3),
-        scoring='neg_mean_absolute_error',
-        n_jobs=1
-    )
-    
-    # This will now succeed because index 0 is correctly identified as a category
-    search.fit(X_train, y_train)
-    best_model = search.best_estimator_
-    
-    # --- Evaluation ---
-    predictions = best_model.predict(X_test)
-    test_df = test_df.copy()
-    test_df['Predicted_Vehicles'] = predictions
-    
-    ai_mae = mean_absolute_error(y_test, predictions)
+    # Calculate metrics on the unseen test set for accuracy reporting
+    test_preds = model.predict(X_test)
+    ai_mae = mean_absolute_error(y_test, test_preds)
     baseline_mae = mean_absolute_error(y_test, X_test['lag1'])
     
     from src.data_processing import classify_traffic
-    test_df['Traffic_Level'] = test_df['Predicted_Vehicles'].apply(classify_traffic)
+    df['Traffic_Level'] = df['Predicted_Vehicles'].apply(classify_traffic)
     
-    return test_results_processing(test_df), ai_mae, baseline_mae, search.cv_results_, search.best_params_
+    # Return the FULL dataframe so the map/slider work for all hours
+    return df, ai_mae, baseline_mae, {}, {}
 
 def test_results_processing(df):
     # Ensure no negative predictions (AI can sometimes guess -5 cars)

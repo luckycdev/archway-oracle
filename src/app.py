@@ -71,6 +71,18 @@ selected_date = datetime.combine(selected_day, datetime.min.time()) + timedelta(
 
 st.sidebar.info(f"📍 Viewing: **{selected_date.strftime('%a, %b %d at %I:%M %p')}**")
 
+# Patience slider
+st.sidebar.subheader("🧠 AI Persona")
+# Add a slider to let the user define how much they hate waiting
+patience = st.sidebar.slider(
+    "Commuter Patience", 
+    min_value=100, 
+    max_value=1000, 
+    value=600, 
+    step=50,
+    help="Higher = Wants to leave ASAP. Lower = Willing to wait for clear roads."
+)
+
 # --- 4. Logic: Data Filtering ---
 segment_df = test_results[test_results['road_segment_id'] == selected_segment].sort_values('DateTime')
 history_data = segment_df[segment_df['DateTime'] <= selected_date]
@@ -109,18 +121,20 @@ if not current_row.empty:
         m4.metric("Visibility", "Good", delta="Normal")
 
 # Best time to leave recommendation
-recommendation = get_best_time_to_leave(future_data)
+recommendation = get_best_time_to_leave(future_data, wait_penalty_per_hour=patience)
+
 if recommendation and recommendation['reduction'] > 50:
     from src.engine import calculate_commute_impact
     impact = calculate_commute_impact(recommendation['reduction'])
 
-    # Special weather warning if the AI is dodging a storm
-    if recommendation['weather_hazard']:
-        weather_note = "⚠️ **Note:** AI suggests waiting for improved weather/visiblity conditions."
+    # Determine the weather note
+    is_hazard = recommendation.get('weather_hazard', False)
+    weather_note = "⚠️ **Note:** AI suggests waiting for improved weather/visibility conditions." if is_hazard else ""
 
     st.success(f"""
         💡 **AI Commute Tip:** Leaving at **{recommendation['time']}** could save you from roughly **{recommendation['reduction']}** vehicles.
-        {weather_note if recommendation.get('weather_hazard') else ""}
+        
+        {weather_note}
         
         ⏱️ **Estimated Savings:** ~{impact['mins']} minutes and ${impact['money']} in fuel costs.
     """)

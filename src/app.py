@@ -111,9 +111,21 @@ if not current_row.empty:
 # Best time to leave recommendation
 recommendation = get_best_time_to_leave(future_data)
 if recommendation and recommendation['reduction'] > 50:
-    st.success(f"💡 **AI Commute Tip:** Leaving at **{recommendation['time']}** could save you from roughly **{recommendation['reduction']}** vehicles.")
+    from src.engine import calculate_commute_impact
+    impact = calculate_commute_impact(recommendation['reduction'])
+
+    # Special weather warning if the AI is dodging a storm
+    if recommendation['weather_hazard']:
+        weather_note = "⚠️ **Note:** AI suggests waiting for improved weather/visiblity conditions."
+
+    st.success(f"""
+        💡 **AI Commute Tip:** Leaving at **{recommendation['time']}** could save you from roughly **{recommendation['reduction']}** vehicles.
+        {weather_note if recommendation.get('weather_hazard') else ""}
+        
+        ⏱️ **Estimated Savings:** ~{impact['mins']} minutes and ${impact['money']} in fuel costs.
+    """)
 elif recommendation:
-    st.info(f"✨ **Note:** Traffic is currently stable. No significant drops expected in the next 3 hours.")
+    st.info(f"🕒 Traffic is currently at its lowest point for the next few hours. Now is the best time to leave!")
 
 # --- 6. Visualization & AI Performance ---
 col_left, col_right = st.columns([5, 3])

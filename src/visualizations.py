@@ -1,4 +1,5 @@
 import plotly.graph_objects as go
+import plotly.express as px
 import pandas as pd
 
 def build_traffic_chart(history_data, future_data, selected_date):
@@ -62,20 +63,39 @@ def build_traffic_chart(history_data, future_data, selected_date):
 
     return fig
 
-def build_feature_importance_chart(fi_df):
-    fig = go.Figure(go.Bar(
-        x=fi_df['Importance'],
-        y=fi_df['Feature'],
+def build_feature_importance_chart(feature_importances):
+    """
+    Creates a horizontal bar chart of feature importances.
+    """
+    # 1. Convert the dictionary to a DataFrame
+    # This ensures the columns are named exactly 'Feature' and 'Importance'
+    fi_df = pd.DataFrame({
+        'Feature': list(feature_importances.keys()),
+        'Importance': list(feature_importances.values())
+    })
+
+    # 2. Sort so the most important is at the top
+    fi_df = fi_df.sort_values(by='Importance', ascending=True)
+
+    # 3. Build the chart
+    fig = px.bar(
+        fi_df,
+        x='Importance',  # Must match the key in the dictionary above
+        y='Feature',     # Must match the key in the dictionary above
         orientation='h',
-        marker_color='#FF4B4B'
-    ))
-    
-    fig.update_layout(
+        title="<b>AI Decision Factors</b>",
+        labels={'Importance': 'Impact Score', 'Feature': 'Factor'},
         template="plotly_dark",
-        height=350,
-        margin=dict(l=20, r=20, t=30, b=20),
-        xaxis_title="Impact on Model Accuracy",
-        yaxis_title="",
-        xaxis=dict(showgrid=True, gridcolor='rgba(255, 255, 255, 0.1)')
+        color='Importance',
+        color_continuous_scale='Viridis'
     )
+
+    # 4. Clean up the layout for the sidebar/column
+    fig.update_layout(
+        showlegend=False,
+        height=300,
+        margin=dict(l=10, r=10, t=40, b=10),
+        coloraxis_showscale=False
+    )
+    
     return fig

@@ -3,8 +3,9 @@ import numpy as np
 import holidays
 
 def classify_traffic(volume):
-    if volume > 80: return "🔴 Red (Heavy)"
-    elif volume > 40: return "🟡 Yellow (Moderate)"
+    # Adjusting thresholds: AWT in STL can be 30k+, so hourly peaks are ~2.5k
+    if volume > 2000: return "🔴 Red (Heavy)"
+    elif volume > 1000: return "🟡 Yellow (Moderate)"
     else: return "🟢 Green (Clear)"
 
 def add_time_features(df):
@@ -13,56 +14,59 @@ def add_time_features(df):
     df['hour_sin'] = np.sin(2 * np.pi * df['hour']/24.0).astype(np.float32)
     df['hour_cos'] = np.cos(2 * np.pi * df['hour']/24.0).astype(np.float32)
     df['day'] = df['DateTime'].dt.dayofweek
-    df['month'] = df['DateTime'].dt.month
-    df['month_sin'] = np.sin(2 * np.pi * df['month']/12.0).astype(np.float32)
-    df['month_cos'] = np.cos(2 * np.pi * df['month']/12.0).astype(np.float32)
     df['is_weekend'] = df['day'].isin([5, 6]).astype(np.int8)
-    return df
-
-def add_holiday_features(df):
-    years = df['DateTime'].dt.year.unique().tolist()
-    us_holidays = holidays.US(years=years)
-    holiday_set = set(us_holidays.keys()) # Using a set lookup is much faster for millions of rows
-    df['is_holiday'] = df['DateTime'].dt.date.apply(lambda x: 1 if x in us_holidays else 0)
     return df
 
 def add_lag_features(df):
     df = df.sort_values(['road_segment_id', 'DateTime'])
-    
     group = df.groupby('road_segment_id')['vehicle_count']
-
-    df['lag1'] = group.shift(1)
-    df['lag2'] = group.shift(2)
-
-    df['rolling_mean_short'] = group.transform(lambda x: x.rolling(window=6).mean())
-    df['rolling_mean_long'] = group.transform(lambda x: x.rolling(window=12).mean())
-
+    df['lag1'] = group.shift(1).astype(np.float32)
+    df['lag2'] = group.shift(2).astype(np.float32)
+    df['rolling_mean_short'] = group.transform(lambda x: x.rolling(window=6).mean()).astype(np.float32)
     return df
 
-def load_and_prep_data(filepath="/workspaces/traffic-predictor/data/TrafficTab23.parquet"):
-    cols_to_load = [
-        'timestamp', 'road_segment_id', 'vehicle_count',
-        'gps_latitude', 'gps_longitude', 'weather_condition',
-        'road_surface_status'
-    ]
-
-    # Fast binary load
-    df = pd.read_parquet(filepath, columns=cols_to_load)
-
-    # 1. Preprocessing Pipeline
-    df = add_time_features(df)
-    df = add_holiday_features(df)
-    df = add_lag_features(df)
-
-    # 2. Impute missing weather
-    if 'weather_condition' in df.columns:
-        df['weather_condition'] = df['weather_condition'].fillna('Clear')
-
-    # 3. Clean up
-    df = df.dropna()
-
-    # Downcast to save 50% RAM on these columns
-    df['gps_latitude'] = df['gps_latitude'].astype(np.float32)
-    df['gps_longitude'] = df['gps_longitude'].astype(np.float32)
+def load_and_prep_data(filepath="TrafficCounts2024_-8820105916022295803.csv"):
+    # 1. Load the specific CSV you uploaded
+    df = pd.read_csv(filepath)
     
-    return df
+    # 2. Filter for recent data (2023) to avoid old 2013 trends
+    df = df[df['Year'] >= 2023].copy()
+
+    # 3. Coordinate Conversion (State Plane to Lat/Long)
+    # Your CSV uses Missouri East State Plane. This math centers it in STL:
+    df['gps_latitude'] = 38.627 + (df['y'] - 1000059) / 364000
+    df['gps_longitude'] = -90.199 + (df['x'] - 837675) / 288000
+    
+    # Rename road identifier
+    df = df.rename(columns={'Onstreet': 'road_segment_id'})
+
+    # 4. Create 24 hours of data for every road (Diurnal Curve)
+    weights = {
+        0: 0.012, 1: 0.008, 2: 0.005, 3: 0.005, 4: 0.01, 5: 0.03, 
+        6: 0.06,  7: 0.085, 8: 0.08,  9: 0.05,  10: 0.045, 11: 0.05,
+        12: 0.055, 13: 0.055, 14: 0.06, 15: 0.08, 16: 0.095, 17: 0.09,
+        18: 0.06, 19: 0.04, 20: 0.03, 21: 0.025, 22: 0.02, 23: 0.015
+    }
+    
+    hourly_dfs = []
+    for hr, weight in weights.items():
+        temp = df.copy()
+        temp['hour'] = hr
+        # Use AWT (Average Weekly Traffic) as the base volume
+        temp['vehicle_count'] = (temp['AWT'] * weight).astype(int)
+        # Use Today's date (March 28, 2026) for the simulation
+        temp['timestamp'] = pd.Timestamp('2026-03-28') + pd.to_timedelta(hr, unit='h')
+        hourly_dfs.append(temp)
+    
+    df = pd.concat(hourly_dfs).reset_index(drop=True)
+
+    # 5. Pipeline
+    df = add_time_features(df)
+    # Add simple holiday check
+    us_holidays = holidays.US(years=[2026])
+    df['is_holiday'] = df['DateTime'].dt.date.isin(us_holidays).astype(np.int8)
+    
+    df = add_lag_features(df)
+    df['weather_condition'] = 'Clear' # Default for synthesized data
+    
+    return df.dropna()

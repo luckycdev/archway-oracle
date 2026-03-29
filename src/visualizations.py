@@ -1,69 +1,71 @@
 import plotly.graph_objects as go
-import numpy as np
-
-COLOR_MAP = {
-    "🔴 Red (Heavy)": "red",
-    "🟡 Yellow (Moderate)": "yellow",
-    "🟢 Green (Clear)": "green"
-}
+import pandas as pd
 
 def build_traffic_chart(history_data, future_data, selected_date):
-    """Build and return the main Plotly traffic forecast figure."""
+    """
+    Creates a Plotly chart showing 24 hours of history and 12 hours of AI forecast.
+    """
     fig = go.Figure()
 
-    # 1. Known Past
+    # 1. Add Historical Data (Actual Counts)
     fig.add_trace(go.Scatter(
-        x=history_data['DateTime'], y=history_data['vehicle_count'],
-        mode='lines', name='Historical Flow',
-        line=dict(color='#1f77b4', width=3)
+        x=history_data['DateTime'],
+        y=history_data['vehicle_count'],
+        name='Historical Traffic',
+        line=dict(color='#3366CC', width=3),
+        fill='tozeroy',
+        fillcolor='rgba(51, 102, 204, 0.1)'
     ))
 
-    # 2. AI Forecast
-    fig.add_trace(go.Scatter(
-        x=future_data['DateTime'], y=future_data['Predicted_Vehicles'],
-        mode='lines', name='AI Predicted Future',
-        line=dict(color='#ff7f03', width=3, dash='dot')
-    ))
-
-    # 3. Ground Truth (What actually happened)
-    fig.add_trace(go.Scatter(
-        x=future_data['DateTime'], y=future_data['vehicle_count'],
-        mode='lines', name='Actual Flow',
-        line=dict(color='gray', width=1, dash='solid'), opacity=0.5
-    ))
-
-    # 4. Traffic Level Markers
+    # 2. Add AI Forecast (Predicted Counts)
     fig.add_trace(go.Scatter(
         x=future_data['DateTime'],
         y=future_data['Predicted_Vehicles'],
-        mode='markers',
-        name='Traffic Status',
-        marker=dict(
-            size=10,
-            color=[COLOR_MAP.get(level, "gray") for level in future_data['Traffic_Level']],
-            line=dict(width=1, color='white') 
-        ),
-        customdata=np.stack((future_data['road_segment_id'], future_data['gps_latitude'], future_data['gps_longitude']), axis=-1),
-        hovertemplate=(
-            "<b>Road Segment:</b> %{customdata[0]}<br>" +
-            "<b>Location:</b> %{customdata[1]:.4f}, %{customdata[2]:.4f}<br>" +
-            "<b>Predicted Count:</b> %{y}<extra></extra>"
-        )
+        name='AI Forecast',
+        line=dict(color='#FF4B4B', width=4, dash='dot'),
+        hovertemplate='%{y:.0f} vehicles/hr<br>%{x|%I:%M %p}'
     ))
 
+    # 3. Add a Vertical Line for the "Present Moment" (WITHOUT annotation here)
+    fig.add_vline(
+        x=selected_date, 
+        line_width=2, 
+        line_dash="dash", 
+        line_color="white"
+    )
+
+    # 4. Add the Annotation manually (This prevents the 'sum' error)
+    fig.add_annotation(
+        x=selected_date,
+        y=1,
+        yref="paper", # Anchors to the top of the chart
+        text="Present Moment",
+        showarrow=False,
+        font=dict(color="white", size=10),
+        bgcolor="rgba(0,0,0,0.5)",
+        xanchor="right",
+        xshift=-5
+    )
+
+    # 5. Styling the Layout
     fig.update_layout(
         template="plotly_dark",
-        xaxis_title="Timeline",
-        yaxis_title="Vehicle Count",
-        hovermode="x unified",
-        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
-        shapes=[dict(
-            type="line",
-            x0=selected_date, x1=selected_date,
-            y0=0, y1=1, yref="paper",
-            line=dict(color="White", width=2, dash="dash")
-        )],
-        margin=dict(l=0, r=0, t=30, b=0)
+        margin=dict(l=20, r=20, t=40, b=20),
+        height=400,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        xaxis=dict(
+            showgrid=False,
+            title="Time of Day",
+            tickformat="%I %p"
+        ),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor='rgba(255,255,255,0.1)',
+            title="Vehicles per Hour"
+        ),
+        hovermode="x unified"
     )
 
     return fig

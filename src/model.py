@@ -1,104 +1,80 @@
-import streamlit as st
+import pandas as pd
+import numpy as np
 from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
 from sklearn.metrics import mean_absolute_error
-from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
-from src.data_processing import classify_traffic
 
+# 1. Define features - Road ID must be handled separately
 FEATURES = [
-    'road_segment_id', 'gps_latitude', 'gps_longitude', 
+    'gps_latitude', 'gps_longitude', 
     'hour', 'hour_sin', 'hour_cos', 
-    'day', 'month', 'month_sin', 'month_cos', 'is_weekend', 
-    'lag1', 'lag2', 'rolling_mean_short', 'rolling_mean_long', 
-    'is_holiday', 'weather_condition'
+    'day', 'is_weekend', 'is_holiday',
+    'lag1', 'lag2', 'rolling_mean_short'
 ]
-
-TARGET = "vehicle_count"
-
-CAT_COLS = ['road_segment_id', 'weather_condition']
-categorical_mask = [True if f in CAT_COLS else False for f in FEATURES]
-
-PARAM_DISTRIBUTIONS = {
-    'learning_rate': [0.01, 0.05, 0.1, 0.2],
-    'max_iter': [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000],
-    'max_depth': [3, 5, 10, 20, 30, 40, 50, None],
-    'l2_regularization': [0.0, 0.1, 1.0]
-}
-
-def prepare_for_training(df):
-    """Ensures categorical columns are formatted for HistGradientBoosting"""
-    df = df.copy()
-    for col in CAT_COLS:
-        if col in df.columns:
-            df[col] = df[col].astype('category')
-    return df
-
-def get_cat_mask():
-    return [True if f in CAT_COLS else False for f in FEATURES]
-
-def tune_and_train(X_train, y_train):
-    tscv = TimeSeriesSplit(n_splits=3)
-
-    cat_mask = get_cat_mask()
-    model = HistGradientBoostingRegressor(random_state=42, categorical_features=cat_mask)
-
-    search = RandomizedSearchCV(
-        model,
-        param_distributions=PARAM_DISTRIBUTIONS,
-        n_iter=5, 
-        cv=tscv,   
-        scoring='neg_mean_absolute_error',
-        n_jobs=1,
-        random_state=42
-    )
-    search.fit(X_train, y_train)
-    return search.best_estimator_, search.best_params_
-
-def run_cross_validation(df, best_params):
-    """Evaluate the best params using TimeSeriesSplit cross-validation."""
-    df = prepare_for_training(df)
-    
-    X_full = df[FEATURES]
-    y_full = df[TARGET]
-    tscv_eval = TimeSeriesSplit(n_splits=3)
-    cv_scores = []
-
-    cat_mask = get_cat_mask()
-
-    for train_index, test_index in tscv_eval.split(X_full):
-        cv_X_train, cv_X_test = X_full.iloc[train_index], X_full.iloc[test_index]
-        cv_y_train, cv_y_test = y_full.iloc[train_index], y_full.iloc[test_index]
-        
-        cv_model = HistGradientBoostingRegressor(**best_params, categorical_features=cat_mask, random_state=42)
-        cv_model.fit(cv_X_train, cv_y_train)
-        
-        preds = cv_model.predict(cv_X_test)
-        cv_scores.append(mean_absolute_error(cv_y_test, preds))
-
-    return cv_scores
+CAT_FEATURES = ['road_segment_id']
 
 def train_and_evaluate(df):
-    """Full training pipeline: tune, train, evaluate, and return results."""
+    df = df.copy()
+    
+    # CRITICAL: Convert road names to 'category' type
+    df['road_segment_id'] = df['road_segment_id'].astype('category')
+    
+    # Sort by time for a valid forecast split
     df = df.sort_values('DateTime')
-    df = prepare_for_training(df)
-
     split_idx = int(len(df) * 0.8)
     train_df = df.iloc[:split_idx]
-    test_df = df.iloc[split_idx:].copy()
+    test_df = df.iloc[split_idx:]
+    
+    # FIX: Put Categorical column FIRST so index 0 is the category
+    X_train = train_df[CAT_FEATURES + FEATURES]
+    y_train = train_df['vehicle_count']
+    X_test = test_df[CAT_FEATURES + FEATURES]
+    y_test = test_df['vehicle_count']
+    
+    # Define the mask: True for the first column (road_id), False for the rest (numeric)
+    # Total columns = 1 (cat) + 11 (numeric) = 12
+    cat_mask = [True] + [False] * len(FEATURES)
 
-    X_train, y_train = train_df[FEATURES], train_df[TARGET]
-    X_test, y_test = test_df[FEATURES], test_df[TARGET]
-
-    # Tune and train
-    model, best_params = tune_and_train(X_train, y_train)
-
-    # Evaluate on hold-out test set
-    test_df['Predicted_Vehicles'] = model.predict(X_test)
+    # --- Model Setup ---
+    model = HistGradientBoostingRegressor(
+        categorical_features=cat_mask,
+        random_state=42
+    )
+    
+    # Simplified search grid for stability
+    param_distributions = {
+        'max_iter': [50, 100],
+        'learning_rate': [0.1],
+        'max_depth': [3, 5]
+    }
+    
+    search = RandomizedSearchCV(
+        model, 
+        param_distributions, 
+        n_iter=3, 
+        cv=TimeSeriesSplit(n_splits=3),
+        scoring='neg_mean_absolute_error',
+        n_jobs=1
+    )
+    
+    # This will now succeed because index 0 is correctly identified as a category
+    search.fit(X_train, y_train)
+    best_model = search.best_estimator_
+    
+    # --- Evaluation ---
+    predictions = best_model.predict(X_test)
+    test_df = test_df.copy()
+    test_df['Predicted_Vehicles'] = predictions
+    
+    ai_mae = mean_absolute_error(y_test, predictions)
+    baseline_mae = mean_absolute_error(y_test, X_test['lag1'])
+    
+    from src.data_processing import classify_traffic
     test_df['Traffic_Level'] = test_df['Predicted_Vehicles'].apply(classify_traffic)
+    
+    return test_results_processing(test_df), ai_mae, baseline_mae, search.cv_results_, search.best_params_
 
-    ai_mae = mean_absolute_error(y_test, test_df['Predicted_Vehicles'])
-    baseline_mae = mean_absolute_error(y_test, test_df['lag1'])
-
-    # Cross-validation
-    cv_scores = run_cross_validation(df, best_params)
-
-    return test_df, ai_mae, baseline_mae, cv_scores, best_params
+def test_results_processing(df):
+    # Ensure no negative predictions (AI can sometimes guess -5 cars)
+    df['Predicted_Vehicles'] = df['Predicted_Vehicles'].clip(lower=0)
+    return df

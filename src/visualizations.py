@@ -93,9 +93,10 @@ def build_feature_importance_chart(feature_importances):
     # 4. Clean up the layout for the sidebar/column
     fig.update_layout(
         showlegend=False,
-        height=300,
+        height=350,
         margin=dict(l=10, r=10, t=40, b=10),
-        coloraxis_showscale=False
+        coloraxis_showscale=False,
+        yaxis=dict(tickfont=dict(size=12))  # Smaller font for feature names
     )
     
     return fig

@@ -1,1 +1,2 @@
-# traffic-predictor
+# Archway Oracle
+Archway Oracle is a traffic detection system for St. Louis that combines computer vision and machine learning to monitor and predict traffic patterns. It uses a YOLO model to analyze live traffic camera feeds and detect vehicles in real time. The system then feeds this data into a HistGradientBoostingRegressor model to forecast traffic flow across the city. By integrating these two approaches, Archway Oracle provides accurate, real-time insights to help manage traffic congestion and improve transportation planning.

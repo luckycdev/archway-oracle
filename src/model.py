@@ -3,6 +3,7 @@ import numpy as np
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error
 from sklearn.inspection import permutation_importance
+from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
 
 # Define features
 FEATURES = [
@@ -37,11 +38,41 @@ def train_and_evaluate(df):
     y_train = train_df['vehicle_count']
     X_test = test_df[['road_segment_id'] + actual_features]
     y_test = test_df['vehicle_count']
+
+    # Define parameter grid
+    param_dist = {
+        'learning_rate': [0.01, 0.05, 0.1],
+        'max_iter': [100, 200, 300],
+        'max_depth': [3, 5, 10, None],
+        'min_samples_leaf': [20, 50, 100],
+        'l2_regularization': [0.0, 0.1, 1.0]
+    }
+
+    tscv = TimeSeriesSplit(n_splits=3)
     
     # 3. Train Model
     # categorical_features=[0] tells the model the first column is the Road ID category
-    model = HistGradientBoostingRegressor(categorical_features=[0], random_state=42, max_iter=100)
-    model.fit(X_train, y_train)
+    base_model = HistGradientBoostingRegressor(
+        categorical_features=[0],
+        random_state=42
+    )
+
+    random_search = RandomizedSearchCV(
+        estimator=base_model,
+        param_distributions=param_dist,
+        n_iter=10,
+        scoring='neg_mean_absolute_error',
+        cv=tscv,
+        verbose=1,
+        random_state=42,
+        n_jobs=-1
+    )
+
+    random_search.fit(X_train, y_train)
+
+    model = random_search.best_estimator_
+    winning_params = random_search.best_params_
+    cv_scores = random_search.cv_results_
     
     # 4. Calculate Feature Importance
     # HistGradientBoosting doesn't have .feature_importances_, so we use permutation_importance
@@ -59,12 +90,9 @@ def train_and_evaluate(df):
     baseline_mae = mean_absolute_error(y_test, X_test['lag1'])
     
     # 7. Classification (Sync with data_processing.py)
-    from data_processing import classify_traffic
+    from src.data_processing import classify_traffic
     df['Traffic_Level'] = df['Predicted_Vehicles'].apply(classify_traffic)
     
-    # Define placeholders for things not currently calculated to prevent Unpack errors
-    cv_scores = {} 
-    winning_params = model.get_params()
 
     # RETURN: Exactly 6 items in the order app.py expects
     return df, ai_mae, baseline_mae, cv_scores, winning_params, fi_dict

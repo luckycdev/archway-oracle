@@ -59,7 +59,7 @@ def train_and_evaluate(df):
     baseline_mae = mean_absolute_error(y_test, X_test['lag1'])
     
     # 7. Classification (Sync with data_processing.py)
-    from src.data_processing import classify_traffic
+    from data_processing import classify_traffic
     df['Traffic_Level'] = df['Predicted_Vehicles'].apply(classify_traffic)
     
     # Define placeholders for things not currently calculated to prevent Unpack errors

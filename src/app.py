@@ -6,11 +6,11 @@ from datetime import datetime, timedelta
 import time 
 
 # Import from our local src modules
-from src.data_processing import load_and_prep_data, classify_traffic
-from src.model import train_and_evaluate
-from src.visualizations import build_traffic_chart, build_feature_importance_chart # Added this
-from src.maps import build_google_map, show_map_legend
-from src.engine import get_best_time_to_leave
+from data_processing import load_and_prep_data, classify_traffic
+from model import train_and_evaluate
+from visualizations import build_traffic_chart, build_feature_importance_chart # Added this
+from maps import build_google_map, show_map_legend
+from engine import get_best_time_to_leave
 
 # --- 1. Page Configuration ---
 st.set_page_config(page_title="ArchWay AI: St. Louis Predictive Traffic Intelligence", layout="wide", page_icon="🚗")
@@ -19,7 +19,7 @@ st.title("🚗 ArchWay AI: St. Louis Predictive Traffic Intelligence")
 # --- 2. Load Data & Model ---
 @st.cache_resource
 def get_data_and_model():
-    df = load_and_prep_data("data/stl_traffic_counts.csv")
+    df = load_and_prep_data("stl_traffic_counts.csv")
     # Added feature_importances to the return
     test_data, ai_mae, baseline_mae, cv_scores, winning_params, feature_importances = train_and_evaluate(df)
     return df, test_data, ai_mae, baseline_mae, winning_params, feature_importances
@@ -124,7 +124,7 @@ if not current_row.empty:
 recommendation = get_best_time_to_leave(future_data, wait_penalty_per_hour=patience)
 
 if recommendation and recommendation['reduction'] > 50:
-    from src.engine import calculate_commute_impact
+    from engine import calculate_commute_impact
     impact = calculate_commute_impact(recommendation['reduction'])
 
     # Determine the weather note

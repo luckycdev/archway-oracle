@@ -3,18 +3,25 @@ import pandas as pd
 import numpy as np
 from sklearn.metrics import mean_absolute_error
 from datetime import datetime, timedelta
-import time 
 
 # Import from our local src modules
 from data_processing import load_and_prep_data, classify_traffic
 from model import train_and_evaluate
 from visualizations import build_traffic_chart, build_feature_importance_chart # Added this
-from maps import build_google_map, show_map_legend
 from engine import get_best_time_to_leave
+from camera_map import (
+    build_camera_map_figure,
+    extract_selected_camera_from_map_event,
+    get_cameras_along_road,
+    get_cameras_near_road,
+    load_camera_points,
+)
+from camera_ui import render_camera_stats
+from camera_workers import get_worker_snapshot, list_camera_names
 
 # --- 1. Page Configuration ---
-st.set_page_config(page_title="ArchWay AI: St. Louis Predictive Traffic Intelligence", layout="wide", page_icon="🚗")
-st.title("🚗 ArchWay AI: St. Louis Predictive Traffic Intelligence")
+st.set_page_config(page_title="ArchWay Oracle: St. Louis Traffic Predictive Intelligence & Detector", layout="wide", page_icon="🚗")
+st.title("🚗 ArchWay Oracle: St. Louis Traffic Predictive Intelligence & Detector")
 
 # --- 2. Load Data & Model ---
 @st.cache_resource
@@ -160,12 +167,149 @@ with col_right:
 
 # --- 7. Bottom Row: Live Spatial View (Map) ---
 st.markdown("---")
-st.subheader("🗺️ Live Spatial View")
-show_map_legend()
+st.subheader("🗺️ Live Camera Map")
 
-api_key = st.secrets.get("GOOGLE_MAPS_API_KEY")
-if api_key:
-    all_segments_at_time = test_results[test_results['DateTime'] == selected_date]
-    build_google_map(all_segments_at_time, selected_segment, api_key, secondary_segment) 
+camera_points = load_camera_points(allowed_locations=list_camera_names())
+camera_names = [point["location"] for point in camera_points]
+camera_name_set = set(camera_names)
+
+if "selected_camera" not in st.session_state:
+    st.session_state.selected_camera = None
+
+if "map_dark_mode" not in st.session_state:
+    st.session_state.map_dark_mode = False
+
+if st.session_state.selected_camera not in camera_name_set:
+    st.session_state.selected_camera = None
+
+camera_selector_options = ["No camera"] + camera_names
+current_camera_option = st.session_state.selected_camera if st.session_state.selected_camera in camera_name_set else "No camera"
+
+if st.session_state.get("camera_selector") != current_camera_option:
+    st.session_state["camera_selector"] = current_camera_option
+
+picked_camera_option = st.selectbox(
+    "Active Camera",
+    camera_selector_options,
+    index=camera_selector_options.index(current_camera_option),
+    key="camera_selector",
+)
+
+picked_camera = None if picked_camera_option == "No camera" else picked_camera_option
+if picked_camera != st.session_state.selected_camera:
+    st.session_state.selected_camera = picked_camera
+    st.rerun()
+
+road_reference_row = segment_df[segment_df['DateTime'] == selected_date]
+if road_reference_row.empty:
+    road_reference_row = segment_df.head(1)
+
+road_latitude = None
+road_longitude = None
+if not road_reference_row.empty:
+    road_latitude = float(road_reference_row['gps_latitude'].iloc[0])
+    road_longitude = float(road_reference_row['gps_longitude'].iloc[0])
+
+st.markdown("### Cameras Along This Road")
+along_road = get_cameras_along_road(camera_points, selected_segment)
+if along_road:
+    for idx, item in enumerate(along_road):
+        camera_name = item["camera"].get("location", "Unknown camera")
+        if st.button(camera_name, key=f"along_road_camera_{idx}_{camera_name}", use_container_width=True):
+            st.session_state.selected_camera = camera_name
+            st.rerun()
 else:
-    st.info("💡 Pro Tip: Add a Google Maps API key to secrets.toml.")
+    st.caption("No named camera matches found for this road.")
+
+st.markdown("### Cameras Near This Road")
+near_road = get_cameras_near_road(camera_points, road_latitude, road_longitude)
+if near_road:
+    for idx, item in enumerate(near_road):
+        camera_name = item["camera"]["location"]
+        label = f"{camera_name} ({item['direction']}, {item['miles']:.1f} mi)"
+        if st.button(label, key=f"near_road_camera_{idx}_{camera_name}", use_container_width=True):
+            st.session_state.selected_camera = camera_name
+            st.rerun()
+else:
+    st.caption("No nearby camera points found.")
+
+toggle_col_1, toggle_col_2 = st.columns([1, 1])
+with toggle_col_1:
+    if st.button("☾" if not st.session_state.map_dark_mode else "☼", key="map_dark_mode_button"):
+        st.session_state.map_dark_mode = not st.session_state.map_dark_mode
+with toggle_col_2:
+    live_update = st.checkbox("Live update selected camera", value=True, key="live_camera_updates")
+
+selected_camera = st.session_state.selected_camera
+
+@st.fragment(run_every="450ms")
+def render_camera_panel():
+    active_camera = st.session_state.selected_camera
+    if not active_camera:
+        st.info("Click a camera on the map to start a worker and view its live feed.")
+        return
+
+    frame_bytes, camera_stats = get_worker_snapshot(active_camera)
+    st.markdown(f"### 📷 Camera Feed: {active_camera}")
+
+    if frame_bytes:
+        st.image(frame_bytes, channels="BGR", width=900)
+    else:
+        st.info("Worker started. Waiting for camera frames...")
+
+    selected_from_stats_nearby = render_camera_stats(camera_stats, camera_points, key_prefix="camera_stats")
+    if selected_from_stats_nearby and selected_from_stats_nearby != st.session_state.selected_camera:
+        st.session_state.selected_camera = selected_from_stats_nearby
+        st.rerun()
+
+
+if live_update:
+    render_camera_panel()
+else:
+    active_camera = st.session_state.selected_camera
+    if active_camera:
+        frame_bytes, camera_stats = get_worker_snapshot(active_camera)
+        st.markdown(f"### 📷 Camera Feed: {active_camera}")
+        if frame_bytes:
+            st.image(frame_bytes, channels="BGR", width=900)
+        else:
+            st.info("Worker started. Waiting for camera frames...")
+        selected_from_stats_nearby = render_camera_stats(camera_stats, camera_points, key_prefix="camera_stats_static")
+        if selected_from_stats_nearby and selected_from_stats_nearby != st.session_state.selected_camera:
+            st.session_state.selected_camera = selected_from_stats_nearby
+            st.rerun()
+    else:
+        st.info("Click a camera on the map to start a worker and view its live feed.")
+
+st.markdown("### Pick From Map")
+if camera_points:
+    map_figure = build_camera_map_figure(
+        camera_points,
+        selected_camera=st.session_state.selected_camera,
+    )
+    with st.container(key="camera_map_shell"):
+        map_filter_css = "invert(1) hue-rotate(180deg) saturate(0.85) brightness(0.9)" if st.session_state.map_dark_mode else "none"
+        st.markdown(
+            f"""
+            <style>
+            .st-key-camera_map_shell [data-testid="stPlotlyChart"] {{
+                filter: {map_filter_css};
+                transition: filter 120ms ease-in-out;
+            }}
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        map_selection = st.plotly_chart(
+            map_figure,
+            use_container_width=True,
+            on_select="rerun",
+            selection_mode="points",
+            key="camera_map",
+        )
+    selected_from_map = extract_selected_camera_from_map_event(map_selection)
+    if selected_from_map and selected_from_map != st.session_state.selected_camera:
+        st.session_state.selected_camera = selected_from_map
+        st.rerun()
+else:
+    st.warning("No camera map points are currently available.")

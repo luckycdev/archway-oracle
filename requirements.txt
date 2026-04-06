@@ -5,3 +5,6 @@ plotly==6.6.0
 scikit-learn==1.8.0
 holidays==0.93
 requests==2.32.5
+opencv-python
+ultralytics
+python-dotenv

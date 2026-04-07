@@ -154,7 +154,7 @@ col_left, col_right = st.columns([5, 3])
 with col_left:
     st.subheader("🔮 24-Hour Traffic Forecast")
     fig = build_traffic_chart(history_data, future_data, selected_date)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 with col_right:
     st.subheader("📊 AI Performance")
@@ -163,7 +163,7 @@ with col_right:
     
     # Feature Importance Chart (Great for hackathons!)
     fi_fig = build_feature_importance_chart(feature_importances) 
-    st.plotly_chart(fi_fig, use_container_width=True)
+    st.plotly_chart(fi_fig, width="stretch")
 
 # --- 7. Bottom Row: Live Spatial View (Map) ---
 st.markdown("---")
@@ -215,7 +215,7 @@ along_road = get_cameras_along_road(camera_points, selected_segment)
 if along_road:
     for idx, item in enumerate(along_road):
         camera_name = item["camera"].get("location", "Unknown camera")
-        if st.button(camera_name, key=f"along_road_camera_{idx}_{camera_name}", use_container_width=True):
+        if st.button(camera_name, key=f"along_road_camera_{idx}_{camera_name}", width="stretch"):
             st.session_state.selected_camera = camera_name
             st.rerun()
 else:
@@ -227,7 +227,7 @@ if near_road:
     for idx, item in enumerate(near_road):
         camera_name = item["camera"]["location"]
         label = f"{camera_name} ({item['direction']}, {item['miles']:.1f} mi)"
-        if st.button(label, key=f"near_road_camera_{idx}_{camera_name}", use_container_width=True):
+        if st.button(label, key=f"near_road_camera_{idx}_{camera_name}", width="stretch"):
             st.session_state.selected_camera = camera_name
             st.rerun()
 else:
@@ -302,7 +302,7 @@ if camera_points:
         )
         map_selection = st.plotly_chart(
             map_figure,
-            use_container_width=True,
+            width="stretch",
             on_select="rerun",
             selection_mode="points",
             key="camera_map",

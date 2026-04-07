@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import holidays
 import requests
+from pathlib import Path
 from datetime import datetime, timedelta
 
 def classify_traffic(volume):
@@ -26,9 +27,24 @@ def add_lag_features(df):
     df['rolling_mean_short'] = group.transform(lambda x: x.rolling(window=6).mean()).astype(np.float32)
     return df
 
-def load_and_prep_data(filepath="data/stl_traffic_counts.csv"):
+
+def _resolve_data_path(filepath):
+    candidate = Path(filepath)
+    if candidate.is_absolute() and candidate.exists():
+        return candidate
+
+    if candidate.exists():
+        return candidate
+
+    module_relative = Path(__file__).resolve().parent / candidate
+    if module_relative.exists():
+        return module_relative
+
+    return candidate
+
+def load_and_prep_data(filepath="stl_traffic_counts.csv"):
     # 1. Load the CSV
-    df = pd.read_csv(filepath)
+    df = pd.read_csv(_resolve_data_path(filepath))
     
     # 2. Rename road segment ID for the model
     df = df.rename(columns={'Onstreet': 'road_segment_id'})

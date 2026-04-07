@@ -26,7 +26,7 @@ st.title("🚗 ArchWay Oracle: St. Louis Traffic Predictive Intelligence & Detec
 # --- 2. Load Data & Model ---
 @st.cache_resource
 def get_data_and_model():
-    df = load_and_prep_data("stl_traffic_counts.csv")
+    df = load_and_prep_data()
     # Added feature_importances to the return
     test_data, ai_mae, baseline_mae, cv_scores, winning_params, feature_importances = train_and_evaluate(df)
     return df, test_data, ai_mae, baseline_mae, winning_params, feature_importances

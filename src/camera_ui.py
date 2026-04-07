@@ -55,7 +55,7 @@ def render_camera_stats(stats, camera_points, key_prefix="stats"):
             for idx, item in enumerate(nearby):
                 camera_name = item["camera"]["location"]
                 label = f"{camera_name} ({item['direction']}, {item['miles']:.1f} mi)"
-                if st.button(label, key=f"{key_prefix}_nearby_{idx}_{camera_name}", use_container_width=True):
+                if st.button(label, key=f"{key_prefix}_nearby_{idx}_{camera_name}", width="stretch"):
                     selected_from_nearby = camera_name
 
     return selected_from_nearby

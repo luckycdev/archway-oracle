@@ -17,7 +17,7 @@ from camera_map import (
     load_camera_points,
 )
 from camera_ui import render_camera_stats
-from camera_workers import get_worker_snapshot, list_camera_names
+from camera_workers import get_worker_snapshot, list_camera_names, set_prediction_context
 
 # --- 1. Page Configuration ---
 st.set_page_config(page_title="ArchWay Oracle: St. Louis Traffic Predictive Intelligence & Detector", layout="wide", page_icon="🚗")
@@ -102,6 +102,23 @@ current_row = segment_df[segment_df['DateTime'] == selected_date]
 if not current_row.empty:
     row = current_row.iloc[0]
     m1, m2, m3, m4 = st.columns(4)
+
+    if st.session_state.get("selected_camera"):
+
+        # Building weather dictionary
+        weather= {
+            "is_snowing": int(row.get("is_snowing", 0)),
+            "is_raining": int(row.get("is_raining", 0)),
+            "sun_glare": int(row.get("sun_glare", 0)),
+        }
+
+        # Calling set_prediction_context function to wrap weather data into
+        # internal dictionary
+        set_prediction_context(
+            camera_name = st.session_state.selected_camera,
+            predicted_vehicles = float(row["Predicted_Vehicles"]),
+            weather = weather
+        )
     
     # 1. Traffic Volume
     m1.metric("Current Vol", f"{int(row['vehicle_count'])}/hr")

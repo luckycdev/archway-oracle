@@ -36,11 +36,19 @@ TRAFFIC_BASELINE_COVERAGE = float(os.getenv("TRAFFIC_BASELINE_COVERAGE", "6.5"))
 TRAFFIC_LIGHT_MAX = float(os.getenv("TRAFFIC_LIGHT_MAX", "2.5"))
 TRAFFIC_MODERATE_MAX = float(os.getenv("TRAFFIC_MODERATE_MAX", "5.0"))
 TRAFFIC_HEAVY_MAX = float(os.getenv("TRAFFIC_HEAVY_MAX", "7.5"))
+PREDICTION_MAX_VEHICLES = float(os.getenv("PREDICTION_MAX_VEHICLES", "2500"))
+WEATHER_PENALTY_SNOW = float(os.getenv("WEATHER_PENALTY_SNOW", "1.5"))
+WEATHER_PENALTY_RAIN = float(os.getenv("WEATHER_PENALTY_RAIN", "0.8"))
+WEATHER_PENALTY_GLARE = float(os.getenv("WEATHER_PENALTY_GLARE", "0.5"))
+VISION_WEIGHT = float(os.getenv("VISION_WEIGHT", "0.6"))
+PREDICTION_WEIGHT = float(os.getenv("PREDICTION_WEIGHT", "0.4"))
 
 LOGGER = logging.getLogger(__name__)
 
 model_lock = Lock()
 workers_lock = Lock()
+prediction_context_lock = Lock()
+prediction_context = {}
 camera_workers = {}
 _loaded_model = None
 
@@ -139,8 +147,9 @@ def to_jsonable(value):
         return float(value)
     return value
 
-
-def traffic_rating(class_counts, coverage):
+def traffic_and_weather_rating(class_counts, coverage, predicted_vehicles, weather):
+    """Calculates traffic score factoring in data from vision and predictive models
+    that ranges from 0-10"""
     baseline_coverage = TRAFFIC_BASELINE_COVERAGE
     adjusted_coverage = max(coverage - baseline_coverage, 0)
     adjusted_max = max(100 - baseline_coverage, 1.0)
@@ -156,17 +165,56 @@ def traffic_rating(class_counts, coverage):
     num_traffic_score = (adjusted_coverage / adjusted_max) * weight_factor
     num_traffic_score_0_to_10 = min(num_traffic_score * 10, 10)
 
-    if num_traffic_score_0_to_10 <= TRAFFIC_LIGHT_MAX:
+    w_penalty = weather_penalty(weather)
+    vision_score = num_traffic_score_0_to_10
+    prediction_score = normalize_num_vehicles_prediction(predicted_vehicles)
+
+    if prediction_score is not None:
+        blended_score = (VISION_WEIGHT * vision_score) + (PREDICTION_WEIGHT * prediction_score)
+    else:
+        # If prediction_score has no data, vision score is fallback to avoid errors
+        blended_score = vision_score
+
+    # Calculating final score based on blended score (vision and predictive)
+    # along with a weather penality, bounding it so it is no greater than 10
+    composite = min(blended_score + w_penalty, 10)
+
+    if composite <= TRAFFIC_LIGHT_MAX:
         text_traffic_score = "Light Traffic"
-    elif num_traffic_score_0_to_10 <= TRAFFIC_MODERATE_MAX:
+    elif composite <= TRAFFIC_MODERATE_MAX:
         text_traffic_score = "Moderate Traffic"
-    elif num_traffic_score_0_to_10 <= TRAFFIC_HEAVY_MAX:
+    elif composite <= TRAFFIC_HEAVY_MAX:
         text_traffic_score = "Heavy Traffic"
     else:
         text_traffic_score = "Very Heavy Traffic"
 
-    return num_traffic_score_0_to_10, text_traffic_score
+    return composite, text_traffic_score
 
+
+def normalize_num_vehicles_prediction(predicted_num_vehicles):
+    """Returns normalized number of vehicles predicted and returns number
+    between 0 and 10"""
+    if predicted_num_vehicles is None:
+        return None
+
+    return min((predicted_num_vehicles / PREDICTION_MAX_VEHICLES) * 10, 10)
+
+
+def weather_penalty(weather):
+    if weather is None:
+        return 0.0
+    penalty = 0.0
+
+    if weather.get("is_snowing"):
+        penalty += WEATHER_PENALTY_SNOW
+
+    if weather.get("is_raining"):
+        penalty += WEATHER_PENALTY_RAIN
+
+    if weather.get("sun_glare"):
+        penalty += WEATHER_PENALTY_GLARE
+
+    return penalty
 
 def vehicle_movement_rating(
     current_positions,
@@ -205,6 +253,33 @@ def vehicle_movement_rating(
 
     return movement_counts
 
+def set_prediction_context(camera_name, predicted_vehicles, weather):
+    """Sets element in prediction_context dictionary that stores camera name
+    as key, and predicted vehicles and weather data as values"""
+
+    # Lock is used to prevent multiple threads from accessing
+    # prediction_context dictionary at once
+    with prediction_context_lock:
+        prediction_context[camera_name] = {
+            "predicted_vehicles": predicted_vehicles,
+            "weather": weather,
+        }
+
+def get_prediction_context(camera_name):
+    """Gets predicted vehicles and weather data for camera name in
+    prediction_context dictionary"""
+
+    # Lock is used to prevent multiple threads from accessing
+    # prediction_context dictionary at once
+    with prediction_context_lock:
+        context = prediction_context.get(camera_name)
+
+        # If nothing is stored relating to a particular camera,
+        # then return None
+        if context is None:
+            return None, None
+
+        return context["predicted_vehicles"], context["weather"]
 
 def get_empty_stats(camera_name):
     return {
@@ -422,7 +497,8 @@ class CameraWorker:
             smoothed_coverage = smoothed_coverage * (1.0 - COVERAGE_SMOOTHING_ALPHA) + effective_coverage * COVERAGE_SMOOTHING_ALPHA
             coverage = smoothed_coverage
 
-            traffic_score, traffic_label = traffic_rating(class_counts, coverage)
+            predicted_vehicles, weather = get_prediction_context(self.camera_name)
+            traffic_score, traffic_label = traffic_and_weather_rating(class_counts, coverage, predicted_vehicles, weather)
 
             mask_colored = cv2.cvtColor(road_mask, cv2.COLOR_GRAY2BGR)
             frame = cv2.addWeighted(frame, 1.0, mask_colored, 0.4, 0)

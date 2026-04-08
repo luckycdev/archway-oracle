@@ -8,16 +8,17 @@ from threading import Lock, Thread
 import cv2
 import numpy as np
 from dotenv import load_dotenv
-from ultralytics import YOLO
 
 from camera_get_cams import fetch_cameras
 
 
 load_dotenv()
 
+os.environ.setdefault("SYMPY_GROUND_TYPES", "python")
+
 DEFAULT_STREAM_SOURCE = os.getenv("DEFAULT_STREAM_SOURCE", "0")
 DEFAULT_CAMERA_NAME = os.getenv("DEFAULT_CAMERA_NAME", "Default Camera")
-YOLO_MODEL = os.getenv("YOLO_MODEL", "yolo_stuff/yolo26n.pt")
+YOLO_MODEL = os.getenv("YOLO_MODEL", "yolo26n.pt")
 YOLO_CONFIDENCE = float(os.getenv("YOLO_CONFIDENCE", "0.15"))
 YOLO_CLASS_IDS = [int(item.strip()) for item in os.getenv("YOLO_CLASS_IDS", "2,3,5,7").split(",") if item.strip()]
 MIN_BOX_BOTTOM_Y_RATIO = float(os.getenv("MIN_BOX_BOTTOM_Y_RATIO", "0.3"))
@@ -307,6 +308,8 @@ def get_yolo_model():
     global _loaded_model
     with model_lock:
         if _loaded_model is None:
+            from ultralytics import YOLO
+
             _loaded_model = YOLO(YOLO_MODEL)
         return _loaded_model
 

@@ -3,7 +3,9 @@ import math
 import os
 import re
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock, Thread
+from urllib.parse import quote, unquote, urlparse
 
 import cv2
 import numpy as np
@@ -43,6 +45,13 @@ WEATHER_PENALTY_RAIN = float(os.getenv("WEATHER_PENALTY_RAIN", "0.8"))
 WEATHER_PENALTY_GLARE = float(os.getenv("WEATHER_PENALTY_GLARE", "0.5"))
 VISION_WEIGHT = float(os.getenv("VISION_WEIGHT", "0.6"))
 PREDICTION_WEIGHT = float(os.getenv("PREDICTION_WEIGHT", "0.4"))
+YOLO_PROCESS_MAX_WIDTH = int(os.getenv("YOLO_PROCESS_MAX_WIDTH", "960"))
+YOLO_DETECTION_INTERVAL_FRAMES = max(1, int(os.getenv("YOLO_DETECTION_INTERVAL_FRAMES", "2")))
+CAMERA_BUFFER_SIZE = max(1, int(os.getenv("CAMERA_BUFFER_SIZE", "1")))
+CAMERA_FRAME_DROP_GRABS = max(0, int(os.getenv("CAMERA_FRAME_DROP_GRABS", "1")))
+STREAM_JPEG_QUALITY = max(40, min(100, int(os.getenv("STREAM_JPEG_QUALITY", "75"))))
+PROCESSED_STREAM_HOST = os.getenv("PROCESSED_STREAM_HOST", "127.0.0.1")
+PROCESSED_STREAM_PORT = int(os.getenv("PROCESSED_STREAM_PORT", "8765"))
 
 LOGGER = logging.getLogger(__name__)
 
@@ -52,6 +61,9 @@ prediction_context_lock = Lock()
 prediction_context = {}
 camera_workers = {}
 _loaded_model = None
+processed_stream_lock = Lock()
+processed_stream_server = None
+processed_stream_thread = None
 
 
 def normalize_video_source(source_value):
@@ -348,6 +360,8 @@ class CameraWorker:
 
     def run(self):
         cam = cv2.VideoCapture(self.camera_source)
+        if cam is not None and cam.isOpened():
+            cam.set(cv2.CAP_PROP_BUFFERSIZE, CAMERA_BUFFER_SIZE)
         road_mask = None
         road_mask_last_seen = None
         smoothed_coverage = 0
@@ -356,6 +370,10 @@ class CameraWorker:
         first_mask_seen_time = None
         previous_positions = []
         generator_start_time = time.monotonic()
+        frame_index = 0
+        cached_detections = []
+        latest_movement_counts = {"stopped": 0, "slow": 0, "fast": 0}
+        model = get_yolo_model()
 
         while True:
             if self.should_stop():
@@ -390,6 +408,8 @@ class CameraWorker:
                         self.latest_stats["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
                 time.sleep(0.5)
                 cam = cv2.VideoCapture(self.camera_source)
+                if cam is not None and cam.isOpened():
+                    cam.set(cv2.CAP_PROP_BUFFERSIZE, CAMERA_BUFFER_SIZE)
                 road_mask = None
                 road_mask_last_seen = None
                 smoothed_coverage = 0
@@ -397,12 +417,16 @@ class CameraWorker:
                 generator_start_time = time.monotonic()
                 continue
 
+            for _ in range(CAMERA_FRAME_DROP_GRABS):
+                cam.grab()
+
             ok, frame = cam.read()
             if not ok or frame is None:
                 time.sleep(0.05)
                 continue
 
             frame_height, frame_width = frame.shape[:2]
+            frame_index += 1
             frame_area = frame_width * frame_height
             frame_time = time.monotonic()
             if previous_frame_time is not None:
@@ -412,9 +436,50 @@ class CameraWorker:
                     smoothed_fps = smoothed_fps * (1.0 - FPS_SMOOTHING_ALPHA) + instant_fps * FPS_SMOOTHING_ALPHA
             previous_frame_time = frame_time
 
-            model = get_yolo_model()
-            with model_lock:
-                results = model.predict(frame, conf=YOLO_CONFIDENCE, classes=YOLO_CLASS_IDS, verbose=False)
+            run_detection_this_frame = (frame_index % YOLO_DETECTION_INTERVAL_FRAMES) == 1
+            if run_detection_this_frame:
+                scale_x = 1.0
+                scale_y = 1.0
+                inference_frame = frame
+
+                if YOLO_PROCESS_MAX_WIDTH > 0 and frame_width > YOLO_PROCESS_MAX_WIDTH:
+                    resized_width = YOLO_PROCESS_MAX_WIDTH
+                    resized_height = max(1, int(frame_height * (resized_width / frame_width)))
+                    inference_frame = cv2.resize(frame, (resized_width, resized_height), interpolation=cv2.INTER_LINEAR)
+                    scale_x = frame_width / float(resized_width)
+                    scale_y = frame_height / float(resized_height)
+
+                with model_lock:
+                    results = model.predict(inference_frame, conf=YOLO_CONFIDENCE, classes=YOLO_CLASS_IDS, verbose=False)
+
+                refreshed_detections = []
+                for result in results:
+                    boxes = result.boxes
+                    if boxes is None:
+                        continue
+
+                    for box in boxes:
+                        x1, y1, x2, y2 = map(int, box.xyxy[0])
+                        conf = float(box.conf[0])
+                        cls = int(box.cls[0])
+
+                        x1 = int(x1 * scale_x)
+                        y1 = int(y1 * scale_y)
+                        x2 = int(x2 * scale_x)
+                        y2 = int(y2 * scale_y)
+
+                        x1 = max(0, min(x1, frame_width - 1))
+                        y1 = max(0, min(y1, frame_height - 1))
+                        x2 = max(0, min(x2, frame_width))
+                        y2 = max(0, min(y2, frame_height))
+                        if x2 <= x1 or y2 <= y1:
+                            continue
+
+                        refreshed_detections.append((x1, y1, x2, y2, conf, cls))
+
+                cached_detections = refreshed_detections
+
+            detections = cached_detections
 
             if road_mask is None or road_mask.shape != (frame_height, frame_width):
                 road_mask = np.zeros((frame_height, frame_width), dtype=np.uint8)
@@ -435,56 +500,51 @@ class CameraWorker:
             class_counts = {}
             current_positions = []
 
-            for result in results:
-                boxes = result.boxes
-                if boxes is None:
+            for (x1, y1, x2, y2, conf, cls) in detections:
+
+                if y2 < frame_height * MIN_BOX_BOTTOM_Y_RATIO:
                     continue
 
-                for box in boxes:
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    conf = float(box.conf[0])
-                    cls = int(box.cls[0])
+                vehicle_count += 1
+                class_name = model.names[cls]
+                class_counts[class_name] = class_counts.get(class_name, 0) + 1
 
-                    if y2 < frame_height * MIN_BOX_BOTTOM_Y_RATIO:
-                        continue
+                cx = (x1 + x2) / 2
+                cy = (y1 + y2) / 2
+                current_positions.append((cx, cy))
 
-                    vehicle_count += 1
-                    class_name = model.names[cls]
-                    class_counts[class_name] = class_counts.get(class_name, 0) + 1
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                label = f"{class_name.title()} {conf*100:.0f}%"
+                cv2.putText(
+                    frame,
+                    label,
+                    (x1, y1 - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45,
+                    (0, 0, 0),
+                    4,
+                    cv2.LINE_AA,
+                )
+                cv2.putText(
+                    frame,
+                    label,
+                    (x1, y1 - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45,
+                    (0, 255, 0),
+                    2,
+                    cv2.LINE_AA,
+                )
 
-                    cx = (x1 + x2) / 2
-                    cy = (y1 + y2) / 2
-                    current_positions.append((cx, cy))
+                boxes_area += (x2 - x1) * (y2 - y1)
+                road_mask[y1:y2, x1:x2] = np.maximum(road_mask[y1:y2, x1:x2], 200)
+                road_mask_last_seen[y1:y2, x1:x2] = now
 
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    label = f"{class_name.title()} {conf*100:.0f}%"
-                    cv2.putText(
-                        frame,
-                        label,
-                        (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.45,
-                        (0, 0, 0),
-                        4,
-                        cv2.LINE_AA,
-                    )
-                    cv2.putText(
-                        frame,
-                        label,
-                        (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.45,
-                        (0, 255, 0),
-                        2,
-                        cv2.LINE_AA,
-                    )
+            if run_detection_this_frame:
+                latest_movement_counts = vehicle_movement_rating(current_positions, previous_positions)
+                previous_positions = current_positions
 
-                    boxes_area += (x2 - x1) * (y2 - y1)
-                    road_mask[y1:y2, x1:x2] = np.maximum(road_mask[y1:y2, x1:x2], 200)
-                    road_mask_last_seen[y1:y2, x1:x2] = now
-
-            movement_counts = vehicle_movement_rating(current_positions, previous_positions)
-            previous_positions = current_positions
+            movement_counts = latest_movement_counts
 
             road_area = np.count_nonzero(road_mask)
             if road_area > 0 and first_mask_seen_time is None:
@@ -506,7 +566,7 @@ class CameraWorker:
             mask_colored = cv2.cvtColor(road_mask, cv2.COLOR_GRAY2BGR)
             frame = cv2.addWeighted(frame, 1.0, mask_colored, 0.4, 0)
 
-            ok, buffer = cv2.imencode(".jpg", frame)
+            ok, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, STREAM_JPEG_QUALITY])
             if not ok:
                 continue
 
@@ -568,3 +628,102 @@ def get_worker_snapshot(camera_name):
 
 def list_camera_names():
     return list(camera_sources.keys())
+
+
+def _build_processed_stream_handler():
+    class ProcessedStreamHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            parsed = urlparse(self.path)
+            if parsed.path == "/health":
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(b"ok")
+                return
+
+            if not parsed.path.startswith("/processed/"):
+                self.send_error(404, "Not found")
+                return
+
+            camera_name = unquote(parsed.path[len("/processed/") :])
+            if not camera_name:
+                self.send_error(400, "Missing camera name")
+                return
+
+            worker = get_or_create_worker(camera_name)
+            worker.add_viewer()
+            try:
+                self.send_response(200)
+                self.send_header("Age", "0")
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Connection", "close")
+                self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+                self.end_headers()
+
+                last_frame_id = -1
+                while True:
+                    with worker.lock:
+                        frame_bytes = worker.latest_frame
+                        frame_id = worker.latest_frame_id
+
+                    if not frame_bytes or frame_id == last_frame_id:
+                        time.sleep(0.01)
+                        continue
+
+                    last_frame_id = frame_id
+                    worker.touch()
+                    try:
+                        self.wfile.write(b"--frame\r\n")
+                        self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                        self.wfile.write(f"Content-Length: {len(frame_bytes)}\r\n\r\n".encode("utf-8"))
+                        self.wfile.write(frame_bytes)
+                        self.wfile.write(b"\r\n")
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        break
+            finally:
+                worker.remove_viewer()
+
+        def log_message(self, format, *args):
+            return
+
+    return ProcessedStreamHandler
+
+
+def ensure_processed_stream_server():
+    global processed_stream_server
+    global processed_stream_thread
+
+    with processed_stream_lock:
+        if processed_stream_thread and processed_stream_thread.is_alive():
+            return True
+
+        try:
+            processed_stream_server = ThreadingHTTPServer(
+                (PROCESSED_STREAM_HOST, PROCESSED_STREAM_PORT),
+                _build_processed_stream_handler(),
+            )
+        except OSError as exc:
+            LOGGER.warning("Processed stream server failed to start on %s:%s (%s)", PROCESSED_STREAM_HOST, PROCESSED_STREAM_PORT, exc)
+            processed_stream_server = None
+            processed_stream_thread = None
+            return False
+
+        processed_stream_thread = Thread(target=processed_stream_server.serve_forever, daemon=True)
+        processed_stream_thread.start()
+        return True
+
+
+def get_processed_stream_url(camera_name):
+    if not camera_name:
+        return ""
+
+    if camera_name not in camera_sources:
+        camera_name = default_camera_name
+
+    if not ensure_processed_stream_server():
+        return ""
+
+    encoded_name = quote(camera_name, safe="")
+    return f"http://{PROCESSED_STREAM_HOST}:{PROCESSED_STREAM_PORT}/processed/{encoded_name}"

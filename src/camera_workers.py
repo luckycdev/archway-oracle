@@ -80,8 +80,9 @@ def normalize_video_source(source_value):
 def extract_stream_from_html(html_value):
     if not html_value:
         return None
-    text = str(html_value)
+    text = str(html_value).strip()
     stream_patterns = [
+        r"https?://[^\s\"'<>]+",
         r"https?://[^\s\"'<>]*CameraStream/[^\s\"'<>]+",
         r"https?://[^\s\"'<>]+\.m3u8[^\s\"'<>]*",
         r"src=[\"']([^\"']+)[\"']",

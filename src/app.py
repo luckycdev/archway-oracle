@@ -39,9 +39,20 @@ with st.spinner("Analyzing St. Louis Road Network..."):
 # --- 3. Sidebar Controls ---
 st.sidebar.header("🕹️ Control Panel")
 
-# Select Primary Roadway
+
+# --- Select Primary Roadway (controlled by session state) ---
 all_segments = sorted(test_results['road_segment_id'].unique())
-selected_segment = st.sidebar.selectbox("1. Select Primary Roadway", all_segments)
+if 'selected_segment' not in st.session_state:
+    st.session_state['selected_segment'] = all_segments[0]
+# If a camera or button set a new segment, update before widget is created
+if '_pending_selected_segment' in st.session_state:
+    st.session_state['selected_segment'] = st.session_state.pop('_pending_selected_segment')
+selected_segment = st.sidebar.selectbox(
+    "1. Select Primary Roadway",
+    all_segments,
+    index=all_segments.index(st.session_state['selected_segment']) if st.session_state['selected_segment'] in all_segments else 0,
+    key='selected_segment',
+)
 
 # Route Comparison Toggle
 compare_on = st.sidebar.checkbox("🔗 Enable Route Comparison")
@@ -201,6 +212,52 @@ if "map_dark_mode" not in st.session_state:
 if st.session_state.selected_camera not in camera_name_set:
     st.session_state.selected_camera = None
 
+
+# --- Camera-to-Segment Sync Logic ---
+import re
+def _normalize_tokens(text):
+    ROAD_STOP_WORDS = {
+        "road", "rd", "street", "st", "avenue", "ave", "boulevard", "blvd",
+        "highway", "hwy", "route", "rt", "interstate", "i", "us", "north",
+        "south", "east", "west", "n", "s", "e", "w",
+    }
+    if not text:
+        return set()
+    raw_tokens = re.findall(r"[a-zA-Z0-9]+", str(text).lower())
+    tokens = {token for token in raw_tokens if token and token not in ROAD_STOP_WORDS and len(token) > 1}
+    return tokens
+
+
+# Improved fuzzy matching for camera-to-segment
+import difflib
+def find_best_matching_segment(camera_name, segments):
+    cam_tokens = _normalize_tokens(camera_name)
+    cam_str = str(camera_name).lower()
+    # Improved: extract main street name from segment and check as word in camera name
+    for seg in segments:
+        seg_tokens = _normalize_tokens(seg)
+        if not seg_tokens:
+            continue
+        main_street = sorted(seg_tokens, key=len, reverse=True)[0]  # Longest token, usually the street name
+        # Use regex to match as a word, ignore case
+        if re.search(rf'\\b{re.escape(main_street)}\\b', cam_str, re.IGNORECASE):
+            return seg
+    # Fallback: fuzzy match on tokens
+    best = None
+    best_score = 0
+    for seg in segments:
+        seg_tokens = _normalize_tokens(seg)
+        score = len(cam_tokens & seg_tokens)
+        if score > best_score:
+            best = seg
+            best_score = score
+    # Fallback: difflib fuzzy match if no token overlap
+    if not best and segments:
+        close = difflib.get_close_matches(camera_name, segments, n=1, cutoff=0.6)
+        if close:
+            return close[0]
+    return best if best_score > 0 else None
+
 camera_selector_options = ["No camera"] + camera_names
 current_camera_option = st.session_state.selected_camera if st.session_state.selected_camera in camera_name_set else "No camera"
 
@@ -214,10 +271,18 @@ picked_camera_option = st.selectbox(
     key="camera_selector",
 )
 
+
+
 picked_camera = None if picked_camera_option == "No camera" else picked_camera_option
 if picked_camera != st.session_state.selected_camera:
     st.session_state.selected_camera = picked_camera
-    st.rerun()
+
+# Always sync segment to selected camera if possible (even after rerun), but only rerun if segment changes
+if st.session_state.selected_camera:
+    match = find_best_matching_segment(st.session_state.selected_camera, all_segments)
+    if match and match != st.session_state['selected_segment']:
+        st.session_state['_pending_selected_segment'] = match
+        st.rerun()
 
 road_reference_row = segment_df[segment_df['DateTime'] == selected_date]
 if road_reference_row.empty:
@@ -236,6 +301,10 @@ if along_road:
         camera_name = item["camera"].get("location", "Unknown camera")
         if st.button(camera_name, key=f"along_road_camera_{idx}_{camera_name}", width="stretch"):
             st.session_state.selected_camera = camera_name
+            # Sync segment to camera
+            match = find_best_matching_segment(camera_name, all_segments)
+            if match and match != st.session_state['selected_segment']:
+                st.session_state['_pending_selected_segment'] = match
             st.rerun()
 else:
     st.caption("No named camera matches found for this road.")
@@ -248,6 +317,10 @@ if near_road:
         label = f"{camera_name} ({item['direction']}, {item['miles']:.1f} mi)"
         if st.button(label, key=f"near_road_camera_{idx}_{camera_name}", width="stretch"):
             st.session_state.selected_camera = camera_name
+            # Sync segment to camera
+            match = find_best_matching_segment(camera_name, all_segments)
+            if match and match != st.session_state['selected_segment']:
+                st.session_state['_pending_selected_segment'] = match
             st.rerun()
 else:
     st.caption("No nearby camera points found.")
@@ -273,7 +346,17 @@ def render_embedded_camera_stream(stream_url, height=560, use_image_tag=False):
     safe_stream_url = escape(stream_url or "", quote=True)
 
     if use_image_tag:
-        components.iframe(safe_stream_url, height=height, scrolling=False)
+        components.html(
+            f"""
+            <div style="width:100%;height:{height}px;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;">
+                <img src="{safe_stream_url}"
+                     alt="Live camera stream"
+                     style="width:100%;height:100%;object-fit:contain;background:#000;" />
+            </div>
+            """,
+            height=height,
+            scrolling=False,
+        )
         return
 
     components.html(

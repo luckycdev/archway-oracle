@@ -1,0 +1,16 @@
+services:
+  server:
+    build:
+      context: .
+      args:
+        SERVER_PORT: 8501 # Uses SERVER_PORT from .env if set, otherwise defaults to 8501
+    environment:
+      SERVER_PORT: 8501
+      PROCESSED_STREAM_BIND_HOST: 0.0.0.0
+      PROCESSED_STREAM_PUBLIC_HOST: 127.0.0.1
+      PROCESSED_STREAM_PORT: 8765
+    ports:
+      - "8501:8501" # Maps the same port from container to host
+      - "8765:8765" # Maps processed MJPEG stream from container to host
+
+

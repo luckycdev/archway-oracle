@@ -50,7 +50,8 @@ YOLO_DETECTION_INTERVAL_FRAMES = max(1, int(os.getenv("YOLO_DETECTION_INTERVAL_F
 CAMERA_BUFFER_SIZE = max(1, int(os.getenv("CAMERA_BUFFER_SIZE", "1")))
 CAMERA_FRAME_DROP_GRABS = max(0, int(os.getenv("CAMERA_FRAME_DROP_GRABS", "1")))
 STREAM_JPEG_QUALITY = max(40, min(100, int(os.getenv("STREAM_JPEG_QUALITY", "75"))))
-PROCESSED_STREAM_HOST = os.getenv("PROCESSED_STREAM_HOST", "127.0.0.1")
+PROCESSED_STREAM_BIND_HOST = os.getenv("PROCESSED_STREAM_BIND_HOST", "127.0.0.1")
+PROCESSED_STREAM_PUBLIC_HOST = os.getenv("PROCESSED_STREAM_PUBLIC_HOST", "127.0.0.1")
 PROCESSED_STREAM_PORT = int(os.getenv("PROCESSED_STREAM_PORT", "8765"))
 
 LOGGER = logging.getLogger(__name__)
@@ -701,11 +702,11 @@ def ensure_processed_stream_server():
 
         try:
             processed_stream_server = ThreadingHTTPServer(
-                (PROCESSED_STREAM_HOST, PROCESSED_STREAM_PORT),
+                (PROCESSED_STREAM_BIND_HOST, PROCESSED_STREAM_PORT),
                 _build_processed_stream_handler(),
             )
         except OSError as exc:
-            LOGGER.warning("Processed stream server failed to start on %s:%s (%s)", PROCESSED_STREAM_HOST, PROCESSED_STREAM_PORT, exc)
+            LOGGER.warning("Processed stream server failed to start on %s:%s (%s)", PROCESSED_STREAM_BIND_HOST, PROCESSED_STREAM_PORT, exc)
             processed_stream_server = None
             processed_stream_thread = None
             return False
@@ -726,4 +727,4 @@ def get_processed_stream_url(camera_name):
         return ""
 
     encoded_name = quote(camera_name, safe="")
-    return f"http://{PROCESSED_STREAM_HOST}:{PROCESSED_STREAM_PORT}/processed/{encoded_name}"
+    return f"http://{PROCESSED_STREAM_PUBLIC_HOST}:{PROCESSED_STREAM_PORT}/processed/{encoded_name}"

@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 from sklearn.metrics import mean_absolute_error
@@ -256,79 +255,26 @@ toggle_col_1, toggle_col_2 = st.columns([1, 1])
 with toggle_col_2:
     live_update = st.checkbox("Live update selected camera", value=True, key="live_camera_updates")
 
-prefer_native_html_stream = st.checkbox(
-    "Use native HTML processed stream rendering (beta)",
-    value=True,
-    key="native_html_stream",
-    help="Renders YOLO-processed frames via local MJPEG stream to reduce Streamlit flicker.",
-)
-
 selected_camera = st.session_state.selected_camera
 
-LIVE_FRAME_REFRESH_INTERVAL = "80ms"
 LIVE_STATS_REFRESH_INTERVAL = "450ms"
 
 
-def render_embedded_camera_stream(stream_url, height=560, use_image_tag=False):
+def render_processed_stream_html(stream_url, height=560):
     safe_stream_url = escape(stream_url or "", quote=True)
-
-    if use_image_tag:
-        components.iframe(safe_stream_url, height=height, scrolling=False)
-        return
-
-    components.html(
+    st.markdown(
         f"""
-        <div style="width:100%;height:{height}px;background:#000;display:flex;align-items:center;justify-content:center;">
-            <video id="camera-video" autoplay muted playsinline controls
-                 style="width:100%;height:100%;object-fit:contain;background:#000;"></video>
+        <div style="width:100%;max-width:900px;height:{height}px;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;">
+            <img
+                id="processed-feed"
+                src="{safe_stream_url}"
+                alt="Processed camera feed"
+                style="width:100%;height:100%;object-fit:contain;background:#000;"
+            />
         </div>
-        <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-        <script>
-            (function() {{
-                const url = "{safe_stream_url}";
-                const video = document.getElementById("camera-video");
-                if (!url || !video) return;
-
-                const lower = url.toLowerCase();
-                const isLikelyHls = lower.includes('.m3u8');
-
-                if (isLikelyHls && window.Hls && window.Hls.isSupported()) {{
-                    const hls = new Hls({{ enableWorker: true, lowLatencyMode: true, backBufferLength: 5 }});
-                    hls.loadSource(url);
-                    hls.attachMedia(video);
-                    hls.on(Hls.Events.MANIFEST_PARSED, function() {{
-                        video.play().catch(function() {{}});
-                    }});
-                }} else if (video.canPlayType('application/vnd.apple.mpegurl') || !isLikelyHls) {{
-                    video.src = url;
-                    video.play().catch(function() {{}});
-                }}
-            }})();
-        </script>
         """,
-        height=height,
-        scrolling=False,
+        unsafe_allow_html=True,
     )
-
-
-@st.fragment(run_every=LIVE_FRAME_REFRESH_INTERVAL)
-def render_live_camera_frame():
-    active_camera = st.session_state.selected_camera
-    if not active_camera:
-        st.info("Click a camera on the map to start a worker and view its live feed.")
-        return
-
-    frame_bytes, _ = get_worker_snapshot(active_camera)
-
-    last_frame_key = f"camera_last_frame::{active_camera}"
-    if frame_bytes:
-        st.session_state[last_frame_key] = frame_bytes
-
-    display_frame = frame_bytes or st.session_state.get(last_frame_key)
-    if display_frame:
-        st.image(display_frame, channels="BGR", width=900)
-    else:
-        st.info("Worker started. Waiting for camera frames...")
 
 
 @st.fragment(run_every=LIVE_STATS_REFRESH_INTERVAL)
@@ -349,38 +295,24 @@ if live_update:
     active_camera = st.session_state.selected_camera
     if active_camera:
         processed_stream_url = get_processed_stream_url(active_camera)
-
         st.markdown(f"### 📷 Camera Feed: {active_camera}")
-        if prefer_native_html_stream and isinstance(processed_stream_url, str) and processed_stream_url.startswith(("http://", "https://")):
-            render_embedded_camera_stream(processed_stream_url, use_image_tag=True)
+        if isinstance(processed_stream_url, str) and processed_stream_url.startswith(("http://", "https://")):
+            render_processed_stream_html(processed_stream_url)
         else:
-            with st.container(key="live_camera_frame"):
-                st.markdown(
-                    """
-                    <style>
-                    .st-key-live_camera_frame [data-testid="stImage"],
-                    .st-key-live_camera_frame [data-testid="stImage"] img {
-                        animation: none !important;
-                        transition: none !important;
-                        opacity: 1 !important;
-                    }
-                    </style>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                render_live_camera_frame()
+            st.info("Worker started. Waiting for processed stream URL...")
         render_live_camera_stats()
     else:
         st.info("Click a camera on the map to start a worker and view its live feed.")
 else:
     active_camera = st.session_state.selected_camera
     if active_camera:
-        frame_bytes, camera_stats = get_worker_snapshot(active_camera)
+        processed_stream_url = get_processed_stream_url(active_camera)
+        _, camera_stats = get_worker_snapshot(active_camera)
         st.markdown(f"### 📷 Camera Feed: {active_camera}")
-        if frame_bytes:
-            st.image(frame_bytes, channels="BGR", width=900)
+        if isinstance(processed_stream_url, str) and processed_stream_url.startswith(("http://", "https://")):
+            render_processed_stream_html(processed_stream_url)
         else:
-            st.info("Worker started. Waiting for camera frames...")
+            st.info("Worker started. Waiting for processed stream URL...")
         selected_from_stats_nearby = render_camera_stats(camera_stats, camera_points, key_prefix="camera_stats_static")
         if selected_from_stats_nearby and selected_from_stats_nearby != st.session_state.selected_camera:
             st.session_state.selected_camera = selected_from_stats_nearby

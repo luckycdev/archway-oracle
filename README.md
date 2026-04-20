@@ -14,3 +14,5 @@ Archway Oracle is a traffic detection system for St. Louis that combines compute
 - Check why map dark/light mode isnt instant change
 - Maybe limit the amount of nearby cams
 - Use .env and Docker
+
+### note: device must have ffmpeg

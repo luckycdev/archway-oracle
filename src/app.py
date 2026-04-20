@@ -4,6 +4,7 @@ import numpy as np
 from sklearn.metrics import mean_absolute_error
 from datetime import datetime, timedelta
 from html import escape
+from urllib.parse import urlsplit, urlunsplit
 
 # Import from our local src modules
 from data_processing import load_and_prep_data, classify_traffic
@@ -272,8 +273,48 @@ with toggle_col_2:
 
 selected_camera = st.session_state.selected_camera
 
+
+def _get_request_hostname():
+    try:
+        headers = getattr(st.context, "headers", None)
+        if headers:
+            host = headers.get("host") or headers.get("Host")
+            if host:
+                return host.split(":", 1)[0].strip("[]")
+    except Exception:
+        return None
+    return None
+
+
+def _resolve_stream_url_for_client(stream_url):
+    if not isinstance(stream_url, str) or not stream_url:
+        return ""
+
+    try:
+        parts = urlsplit(stream_url)
+    except Exception:
+        return stream_url
+
+    if parts.hostname not in {"127.0.0.1", "localhost", "0.0.0.0"}:
+        return stream_url
+
+    request_host = _get_request_hostname()
+    if not request_host:
+        return stream_url
+
+    user_info = ""
+    if parts.username:
+        user_info = parts.username
+        if parts.password:
+            user_info = f"{user_info}:{parts.password}"
+        user_info = f"{user_info}@"
+
+    port_suffix = f":{parts.port}" if parts.port else ""
+    rebuilt_netloc = f"{user_info}{request_host}{port_suffix}"
+    return urlunsplit((parts.scheme, rebuilt_netloc, parts.path, parts.query, parts.fragment))
+
 def render_processed_stream_html(stream_url, height=560):
-    safe_stream_url = escape(stream_url or "", quote=True)
+    safe_stream_url = escape(_resolve_stream_url_for_client(stream_url), quote=True)
     st.markdown(
         f"""
         <div style="width:100%;max-width:900px;height:{height}px;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;">

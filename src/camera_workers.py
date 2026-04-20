@@ -742,4 +742,4 @@ def get_processed_stream_url(camera_name):
         return ""
 
     encoded_name = quote(camera_name, safe="")
-    return f"http://{PROCESSED_STREAM_PUBLIC_HOST}:{PROCESSED_STREAM_PORT}/processed/{encoded_name}"
+    return f"/processed/{encoded_name}"

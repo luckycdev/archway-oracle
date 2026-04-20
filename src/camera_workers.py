@@ -44,6 +44,7 @@ from config import (
     WORKER_IDLE_TIMEOUT_SECONDS,
     YOLO_CLASS_IDS,
     YOLO_CONFIDENCE,
+    YOLO_DEVICE,
     YOLO_DETECTION_INTERVAL_FRAMES,
     YOLO_MODEL,
     YOLO_PROCESS_MAX_WIDTH,
@@ -446,7 +447,7 @@ class CameraWorker:
                     scale_y = frame_height / float(resized_height)
 
                 with model_lock:
-                    results = model.predict(inference_frame, conf=YOLO_CONFIDENCE, classes=YOLO_CLASS_IDS, verbose=False)
+                    results = model.predict(inference_frame, conf=YOLO_CONFIDENCE, classes=YOLO_CLASS_IDS, device = YOLO_DEVICE, verbose=False)
 
                 refreshed_detections = []
                 for result in results:

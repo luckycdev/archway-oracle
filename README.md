@@ -15,4 +15,4 @@ Archway Oracle is a traffic detection system for St. Louis that combines compute
 - Maybe limit the amount of nearby cams
 - Use .env and Docker
 
-### note: device must have ffmpeg
+- note: may have to install fmmpeg and torch

@@ -349,7 +349,7 @@ if live_update:
     if active_camera:
         processed_stream_url = get_processed_stream_url(active_camera)
         st.markdown(f"### 📷 Camera Feed: {active_camera}")
-        if isinstance(processed_stream_url, str) and processed_stream_url.startswith(("http://", "https://")):
+        if isinstance(processed_stream_url, str) and processed_stream_url.startswith(("http://", "https://", "/")):
             render_processed_stream_html(processed_stream_url)
         else:
             st.info("Worker started. Waiting for processed stream URL...")
@@ -362,7 +362,7 @@ else:
         processed_stream_url = get_processed_stream_url(active_camera)
         _, camera_stats = get_worker_snapshot(active_camera)
         st.markdown(f"### 📷 Camera Feed: {active_camera}")
-        if isinstance(processed_stream_url, str) and processed_stream_url.startswith(("http://", "https://")):
+        if isinstance(processed_stream_url, str) and processed_stream_url.startswith(("http://", "https://", "/")):
             render_processed_stream_html(processed_stream_url)
         else:
             st.info("Worker started. Waiting for processed stream URL...")

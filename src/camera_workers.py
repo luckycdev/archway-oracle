@@ -47,6 +47,7 @@ from config import (
     YOLO_DEVICE,
     YOLO_DETECTION_INTERVAL_FRAMES,
     YOLO_MODEL,
+    YOLO_MAX_VRAM_GB,
     YOLO_PROCESS_MAX_WIDTH,
 )
 
@@ -317,6 +318,24 @@ def get_yolo_model():
     global _loaded_model
     with model_lock:
         if _loaded_model is None:
+            try:
+                import torch
+
+                if YOLO_DEVICE not in {"cpu", "mps"} and torch.cuda.is_available():
+                    try:
+                        device_index = int(str(YOLO_DEVICE).strip())
+                    except ValueError:
+                        device_index = 0
+
+                    total_vram_bytes = torch.cuda.get_device_properties(device_index).total_memory
+                    total_vram_gb = total_vram_bytes / (1024 ** 3)
+                    if total_vram_gb > 0:
+                        memory_fraction = min(max(YOLO_MAX_VRAM_GB / total_vram_gb, 0.0), 0.99)
+                        torch.cuda.set_device(device_index)
+                        torch.cuda.set_per_process_memory_fraction(memory_fraction, device=device_index)
+            except Exception as exc:
+                LOGGER.warning("Unable to apply YOLO CUDA memory cap: %s", exc)
+
             from ultralytics import YOLO
 
             _loaded_model = YOLO(YOLO_MODEL)

@@ -4,6 +4,32 @@ import holidays
 import requests
 from pathlib import Path
 from datetime import datetime, timedelta
+from config import (
+    DATA_FILE_PATH,
+    DATA_MIN_YEAR,
+    GPS_LAT_BASE,
+    GPS_LAT_SCALE,
+    GPS_LON_BASE,
+    GPS_LON_SCALE,
+    HOLIDAY_YEARS,
+    MORNING_SIM_PRECIPITATION,
+    MORNING_SIM_TEMPERATURE,
+    MORNING_WEATHER_END_HOUR,
+    MORNING_WEATHER_START_HOUR,
+    OPEN_METEO_BASE_URL,
+    OPEN_METEO_LATITUDE,
+    OPEN_METEO_LONGITUDE,
+    OPEN_METEO_TIMEOUT_SECONDS,
+    SUN_GLARE_CLOUD_THRESHOLD,
+    SUN_GLARE_HOURS,
+    SYNTH_DAYS_BACK,
+    SYNTH_DAYS_FORWARD,
+    SYNTH_NOISE_MAX,
+    SYNTH_NOISE_MIN,
+    WEATHER_FALLBACK_CLOUD_COVER,
+    WEATHER_FALLBACK_PRECIPITATION,
+    WEATHER_FALLBACK_TEMPERATURE,
+)
 
 def classify_traffic(volume):
     if volume > 2000: return "🔴 Red (Heavy)"
@@ -42,7 +68,7 @@ def _resolve_data_path(filepath):
 
     return candidate
 
-def load_and_prep_data(filepath="stl_traffic_counts.csv"):
+def load_and_prep_data(filepath=DATA_FILE_PATH):
     # 1. Load the CSV
     df = pd.read_csv(_resolve_data_path(filepath))
     
@@ -50,12 +76,12 @@ def load_and_prep_data(filepath="stl_traffic_counts.csv"):
     df = df.rename(columns={'Onstreet': 'road_segment_id'})
 
     # 3. Filter for recent data
-    df = df[df['Year'] >= 2023].copy()
+    df = df[df['Year'] >= DATA_MIN_YEAR].copy()
 
     # 4. Accurate Coordinate Conversion (State Plane Feet to Lat/Long)
     # Calibrated for St. Louis County (Des Peres, Kirkwood, Mehlville area)
-    df['gps_latitude'] = 35.8134 + (df['y'] * 0.000002778)
-    df['gps_longitude'] = -93.3488 + (df['x'] * 0.000003465)
+    df['gps_latitude'] = GPS_LAT_BASE + (df['y'] * GPS_LAT_SCALE)
+    df['gps_longitude'] = GPS_LON_BASE + (df['x'] * GPS_LON_SCALE)
     
     # 5. Synthesize Hourly Data
     weights = {
@@ -67,9 +93,8 @@ def load_and_prep_data(filepath="stl_traffic_counts.csv"):
     
     today_date = datetime.now().date()
     dates_to_generate = [
-        today_date - timedelta(days=1), # Yesterday (gets sacrificed to dropna)
-        today_date,                     # Today (shows on dashboard)
-        today_date + timedelta(days=1)  # Tomorrow (future forecasting)
+        today_date + timedelta(days=offset)
+        for offset in range(-SYNTH_DAYS_BACK, SYNTH_DAYS_FORWARD + 1)
     ]
     
     hourly_dfs = []
@@ -78,7 +103,7 @@ def load_and_prep_data(filepath="stl_traffic_counts.csv"):
             temp = df.copy()
             temp['hour'] = hr
             base_volume = temp['AWT'] * weight
-            noise_multiplier = np.random.uniform(0.85, 1.15, size=len(temp))
+            noise_multiplier = np.random.uniform(SYNTH_NOISE_MIN, SYNTH_NOISE_MAX, size=len(temp))
             temp['vehicle_count'] = (base_volume * noise_multiplier).astype(int)
             temp['timestamp'] = pd.Timestamp(d) + pd.to_timedelta(hr, unit='h')
             hourly_dfs.append(temp)
@@ -93,29 +118,29 @@ def load_and_prep_data(filepath="stl_traffic_counts.csv"):
 
     # Simulate a cold, rainy/snowy morning (6A M - 10 AM)
     # This gives the AI something to "learn" from
-    morning_mask = (df['hour'] >= 6) & (df['hour'] <= 10)
-    df.loc[morning_mask, 'precipitation'] = 4.5
-    df.loc[morning_mask, 'temperature'] = -2.0  # Cold enough for snow
+    morning_mask = (df['hour'] >= MORNING_WEATHER_START_HOUR) & (df['hour'] <= MORNING_WEATHER_END_HOUR)
+    df.loc[morning_mask, 'precipitation'] = MORNING_SIM_PRECIPITATION
+    df.loc[morning_mask, 'temperature'] = MORNING_SIM_TEMPERATURE
     
     start_date = df['DateTime'].min().strftime('%Y-%m-%d')
     end_date = df['DateTime'].max().strftime('%Y-%m-%d')
     
     # 6. Weather engine (API Integration)
-    LATITUDE = 38.6274
-    LONGITUDE = -90.1982
+    LATITUDE = OPEN_METEO_LATITUDE
+    LONGITUDE = OPEN_METEO_LONGITUDE
     
     start_date = dates_to_generate[0].strftime('%Y-%m-%d')
     end_date = dates_to_generate[-1].strftime('%Y-%m-%d')
     
     weather_url = (
-        f"https://api.open-meteo.com/v1/forecast?"
+        f"{OPEN_METEO_BASE_URL}?"
         f"latitude={LATITUDE}&longitude={LONGITUDE}&"
         f"start_date={start_date}&end_date={end_date}&"
         f"hourly=temperature_2m,precipitation,cloud_cover&timezone=auto" # Added cloud_cover to the request
     )
     
     try:
-        response = requests.get(weather_url, timeout=5)
+        response = requests.get(weather_url, timeout=OPEN_METEO_TIMEOUT_SECONDS)
         if response.status_code == 200:
             data = response.json()
             weather_df = pd.DataFrame({
@@ -126,28 +151,27 @@ def load_and_prep_data(filepath="stl_traffic_counts.csv"):
             })
             # Merge and use the API values
             df = pd.merge(df, weather_df, on='DateTime', how='left')
-            df['temperature'] = df['temp_api'].fillna(15.0)
-            df['precipitation'] = df['precip_api'].fillna(0.0)
-            df['cloud_cover'] = df['cloud_api'].fillna(0.0)
+            df['temperature'] = df['temp_api'].fillna(WEATHER_FALLBACK_TEMPERATURE)
+            df['precipitation'] = df['precip_api'].fillna(WEATHER_FALLBACK_PRECIPITATION)
+            df['cloud_cover'] = df['cloud_api'].fillna(WEATHER_FALLBACK_CLOUD_COVER)
             # Drop the temporary helper columns
             df = df.drop(columns=['temp_api', 'precip_api', 'cloud_api'])
         else:
             raise ValueError("API Offline")
     except Exception:
         # Robust Fallbacks
-        df['temperature'] = 15.0
-        df['precipitation'] = 0.0
-        df['cloud_cover'] = 0.0
+        df['temperature'] = WEATHER_FALLBACK_TEMPERATURE
+        df['precipitation'] = WEATHER_FALLBACK_PRECIPITATION
+        df['cloud_cover'] = WEATHER_FALLBACK_CLOUD_COVER
 
     # Logic for Rain/Snow/Glare (Apply this AFTER the merge)
     df['is_snowing'] = ((df['precipitation'] > 0) & (df['temperature'] <= 0)).astype(np.int8)
     df['is_raining'] = ((df['precipitation'] > 0) & (df['temperature'] > 0)).astype(np.int8)
     
-    glare_hours = [7, 8, 17, 18]
-    df['sun_glare'] = ((df['cloud_cover'] < 30) & (df['hour'].isin(glare_hours))).astype(np.int8)
+    df['sun_glare'] = ((df['cloud_cover'] < SUN_GLARE_CLOUD_THRESHOLD) & (df['hour'].isin(SUN_GLARE_HOURS))).astype(np.int8)
     
     # Add simple holiday check
-    us_holidays = holidays.US(years=[2026])
+    us_holidays = holidays.US(years=HOLIDAY_YEARS)
     df['is_holiday'] = df['DateTime'].dt.date.isin(us_holidays).astype(np.int8)
     
     df = add_lag_features(df)

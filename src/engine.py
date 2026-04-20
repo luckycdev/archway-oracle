@@ -1,5 +1,14 @@
 import numpy as np
 import pandas as pd
+from config import (
+    COMMUTE_GALLONS_PER_5_MIN,
+    COMMUTE_MINUTES_PER_100_VEHICLES,
+    GAS_PRICE_PER_GALLON,
+    LOOKAHEAD_HOURS,
+    WEATHER_SCORE_PENALTY_GLARE,
+    WEATHER_SCORE_PENALTY_RAIN,
+    WEATHER_SCORE_PENALTY_SNOW,
+)
 
 def get_best_time_to_leave(future_df, wait_penalty_per_hour=400):
     """
@@ -10,20 +19,20 @@ def get_best_time_to_leave(future_df, wait_penalty_per_hour=400):
         return None
 
     # 1. Look at only the next 4 hours from the current slider position
-    next_4_hours = future_df.head(4).copy()
+    next_4_hours = future_df.head(LOOKAHEAD_HOURS).copy()
 
     # 2. Weather and visibility penalties
     # We add "virtual vehicles" to the score to discourage leaving during bad weather
     next_4_hours['Weather_Penalty'] = 0
 
     # If snowing, add a massive penalty (equivalent to 1000 extra cars)
-    next_4_hours.loc[next_4_hours['is_snowing'] == 1, 'Weather_Penalty'] += 1000
+    next_4_hours.loc[next_4_hours['is_snowing'] == 1, 'Weather_Penalty'] += WEATHER_SCORE_PENALTY_SNOW
 
     # If raining, add a moderate penalty
-    next_4_hours.loc[next_4_hours['is_raining'] == 1, 'Weather_Penalty'] += 400
+    next_4_hours.loc[next_4_hours['is_raining'] == 1, 'Weather_Penalty'] += WEATHER_SCORE_PENALTY_RAIN
 
     # If high glare, add a visibility penalty
-    next_4_hours.loc[next_4_hours['sun_glare'] == 1, 'Weather_Penalty'] += 300
+    next_4_hours.loc[next_4_hours['sun_glare'] == 1, 'Weather_Penalty'] += WEATHER_SCORE_PENALTY_GLARE
 
     # 3. Calculate final adjusted score
     # Wait_Step represents hours waited (0, 1, 2, 3)
@@ -52,13 +61,13 @@ def calculate_commute_impact(volume_reduction):
     Assumes a standard 15-mile St. Louis commute.
     """
     # Heuristic: For every 100 vehicles reduced, save ~2 mins of idling/stop-go
-    minutes_saved = (volume_reduction / 100) * 2
+    minutes_saved = (volume_reduction / 100) * COMMUTE_MINUTES_PER_100_VEHICLES
 
     # Heuristic: Idling/Stop-go consumes ~0.05 gallons per 5 mins
-    gallons_saved = (minutes_saved / 5) * 0.05
+    gallons_saved = (minutes_saved / 5) * COMMUTE_GALLONS_PER_5_MIN
 
     # Current STL Avg Gas Price (approx for 2026)
-    fuel_money_saved = gallons_saved * 3.25
+    fuel_money_saved = gallons_saved * GAS_PRICE_PER_GALLON
 
     return {
         'mins': round(max(0, minutes_saved), 1), # max(0,...) prevents negative savings

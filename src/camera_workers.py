@@ -1,6 +1,5 @@
 import logging
 import math
-import os
 import re
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -9,50 +8,46 @@ from urllib.parse import quote, unquote, urlparse
 
 import cv2
 import numpy as np
-from dotenv import load_dotenv
 
 from camera_get_cams import fetch_cameras
-
-
-load_dotenv()
-
-os.environ.setdefault("SYMPY_GROUND_TYPES", "python")
-
-DEFAULT_STREAM_SOURCE = os.getenv("DEFAULT_STREAM_SOURCE", "0")
-DEFAULT_CAMERA_NAME = os.getenv("DEFAULT_CAMERA_NAME", "Default Camera")
-YOLO_MODEL = os.getenv("YOLO_MODEL", "yolo26n.pt")
-YOLO_CONFIDENCE = float(os.getenv("YOLO_CONFIDENCE", "0.15"))
-YOLO_CLASS_IDS = [int(item.strip()) for item in os.getenv("YOLO_CLASS_IDS", "2,3,5,7").split(",") if item.strip()]
-MIN_BOX_BOTTOM_Y_RATIO = float(os.getenv("MIN_BOX_BOTTOM_Y_RATIO", "0.3"))
-WORKER_IDLE_TIMEOUT_SECONDS = int(os.getenv("WORKER_IDLE_TIMEOUT_SECONDS", "10"))
-MOVEMENT_STOPPED_THRESHOLD_PIXELS = float(os.getenv("MOVEMENT_STOPPED_THRESHOLD_PIXELS", "0.5"))
-MOVEMENT_SLOW_THRESHOLD_PIXELS = float(os.getenv("MOVEMENT_SLOW_THRESHOLD_PIXELS", "4.0"))
-MOVEMENT_MAX_MATCH_DISTANCE_PIXELS = float(os.getenv("MOVEMENT_MAX_MATCH_DISTANCE_PIXELS", "100.0"))
-ROAD_MASK_STALE_SECONDS = float(os.getenv("ROAD_MASK_STALE_SECONDS", "5.0"))
-ROAD_MASK_WARMUP_SECONDS = float(os.getenv("ROAD_MASK_WARMUP_SECONDS", "0.5"))
-ROAD_MASK_FADE_MULTIPLIER = float(os.getenv("ROAD_MASK_FADE_MULTIPLIER", "0.95"))
-ROAD_MASK_MIN_VALUE = int(os.getenv("ROAD_MASK_MIN_VALUE", "5"))
-ROAD_LEARNING_MIN_FRAME_RATIO = float(os.getenv("ROAD_LEARNING_MIN_FRAME_RATIO", "0.05"))
-FPS_SMOOTHING_ALPHA = float(os.getenv("FPS_SMOOTHING_ALPHA", "0.2"))
-COVERAGE_SMOOTHING_ALPHA = float(os.getenv("COVERAGE_SMOOTHING_ALPHA", "0.2"))
-TRAFFIC_BASELINE_COVERAGE = float(os.getenv("TRAFFIC_BASELINE_COVERAGE", "6.5"))
-TRAFFIC_LIGHT_MAX = float(os.getenv("TRAFFIC_LIGHT_MAX", "2.5"))
-TRAFFIC_MODERATE_MAX = float(os.getenv("TRAFFIC_MODERATE_MAX", "5.0"))
-TRAFFIC_HEAVY_MAX = float(os.getenv("TRAFFIC_HEAVY_MAX", "7.5"))
-PREDICTION_MAX_VEHICLES = float(os.getenv("PREDICTION_MAX_VEHICLES", "2500"))
-WEATHER_PENALTY_SNOW = float(os.getenv("WEATHER_PENALTY_SNOW", "1.5"))
-WEATHER_PENALTY_RAIN = float(os.getenv("WEATHER_PENALTY_RAIN", "0.8"))
-WEATHER_PENALTY_GLARE = float(os.getenv("WEATHER_PENALTY_GLARE", "0.5"))
-VISION_WEIGHT = float(os.getenv("VISION_WEIGHT", "0.6"))
-PREDICTION_WEIGHT = float(os.getenv("PREDICTION_WEIGHT", "0.4"))
-YOLO_PROCESS_MAX_WIDTH = int(os.getenv("YOLO_PROCESS_MAX_WIDTH", "960"))
-YOLO_DETECTION_INTERVAL_FRAMES = max(1, int(os.getenv("YOLO_DETECTION_INTERVAL_FRAMES", "2")))
-CAMERA_BUFFER_SIZE = max(1, int(os.getenv("CAMERA_BUFFER_SIZE", "1")))
-CAMERA_FRAME_DROP_GRABS = max(0, int(os.getenv("CAMERA_FRAME_DROP_GRABS", "1")))
-STREAM_JPEG_QUALITY = max(40, min(100, int(os.getenv("STREAM_JPEG_QUALITY", "75"))))
-PROCESSED_STREAM_BIND_HOST = os.getenv("PROCESSED_STREAM_BIND_HOST", "127.0.0.1")
-PROCESSED_STREAM_PUBLIC_HOST = os.getenv("PROCESSED_STREAM_PUBLIC_HOST", "127.0.0.1")
-PROCESSED_STREAM_PORT = int(os.getenv("PROCESSED_STREAM_PORT", "8765"))
+from config import (
+    CAMERA_BUFFER_SIZE,
+    CAMERA_FRAME_DROP_GRABS,
+    COVERAGE_SMOOTHING_ALPHA,
+    DEFAULT_CAMERA_NAME,
+    DEFAULT_STREAM_SOURCE,
+    FPS_SMOOTHING_ALPHA,
+    MIN_BOX_BOTTOM_Y_RATIO,
+    MOVEMENT_MAX_MATCH_DISTANCE_PIXELS,
+    MOVEMENT_SLOW_THRESHOLD_PIXELS,
+    MOVEMENT_STOPPED_THRESHOLD_PIXELS,
+    PREDICTION_MAX_VEHICLES,
+    PREDICTION_WEIGHT,
+    PROCESSED_STREAM_BIND_HOST,
+    PROCESSED_STREAM_PORT,
+    PROCESSED_STREAM_PUBLIC_HOST,
+    ROAD_LEARNING_MIN_FRAME_RATIO,
+    ROAD_MASK_FADE_MULTIPLIER,
+    ROAD_MASK_MIN_VALUE,
+    ROAD_MASK_STALE_SECONDS,
+    ROAD_MASK_WARMUP_SECONDS,
+    STREAM_JPEG_QUALITY,
+    TRAFFIC_BASELINE_COVERAGE,
+    TRAFFIC_HEAVY_MAX,
+    TRAFFIC_LIGHT_MAX,
+    TRAFFIC_MODERATE_MAX,
+    VIDEO_SOURCE,
+    VISION_WEIGHT,
+    WEATHER_PENALTY_GLARE,
+    WEATHER_PENALTY_RAIN,
+    WEATHER_PENALTY_SNOW,
+    WORKER_IDLE_TIMEOUT_SECONDS,
+    YOLO_CLASS_IDS,
+    YOLO_CONFIDENCE,
+    YOLO_DETECTION_INTERVAL_FRAMES,
+    YOLO_MODEL,
+    YOLO_PROCESS_MAX_WIDTH,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -119,7 +114,7 @@ def load_camera_sources():
 
 
 camera_sources = load_camera_sources()
-default_source = normalize_video_source(os.getenv("VIDEO_SOURCE", DEFAULT_STREAM_SOURCE))
+default_source = normalize_video_source(VIDEO_SOURCE)
 
 
 def get_camera_raw_stream_url(camera_name):

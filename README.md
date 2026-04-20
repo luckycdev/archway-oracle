@@ -14,3 +14,8 @@ Archway Oracle is a traffic detection system for St. Louis that combines compute
 - Check why map dark/light mode isnt instant change
 - Maybe limit the amount of nearby cams
 - Use .env and Docker
+
+## Configuration
+- Runtime and tuning settings now live in `.env`.
+- Typed env parsing and defaults live in `src/config.py`.
+- Core modules (`src/app.py`, `src/data_processing.py`, `src/model.py`, `src/engine.py`, `src/camera_get_cams.py`, `src/camera_workers.py`) consume values from `src/config.py`.

@@ -4,6 +4,15 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error
 from sklearn.inspection import permutation_importance
 from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
+from config import (
+    MODEL_CV_SPLITS,
+    MODEL_PERMUTATION_REPEATS,
+    MODEL_RANDOM_STATE,
+    MODEL_SEARCH_ITERATIONS,
+    MODEL_SEARCH_N_JOBS,
+    MODEL_SEARCH_VERBOSE,
+    MODEL_TEST_SPLIT_RATIO,
+)
 
 # Define features
 FEATURES = [
@@ -30,7 +39,7 @@ def train_and_evaluate(df):
     
     # 2. Sort and Time-Series Split
     df = df.sort_values('DateTime')
-    split_idx = int(len(df) * 0.8)
+    split_idx = int(len(df) * MODEL_TEST_SPLIT_RATIO)
     train_df = df.iloc[:split_idx]
     test_df = df.iloc[split_idx:]
     
@@ -48,24 +57,24 @@ def train_and_evaluate(df):
         'l2_regularization': [0.0, 0.1, 1.0]
     }
 
-    tscv = TimeSeriesSplit(n_splits=3)
+    tscv = TimeSeriesSplit(n_splits=MODEL_CV_SPLITS)
     
     # 3. Train Model
     # categorical_features=[0] tells the model the first column is the Road ID category
     base_model = HistGradientBoostingRegressor(
         categorical_features=[0],
-        random_state=42
+        random_state=MODEL_RANDOM_STATE
     )
 
     random_search = RandomizedSearchCV(
         estimator=base_model,
         param_distributions=param_dist,
-        n_iter=10,
+        n_iter=MODEL_SEARCH_ITERATIONS,
         scoring='neg_mean_absolute_error',
         cv=tscv,
-        verbose=1,
-        random_state=42,
-        n_jobs=-1
+        verbose=MODEL_SEARCH_VERBOSE,
+        random_state=MODEL_RANDOM_STATE,
+        n_jobs=MODEL_SEARCH_N_JOBS
     )
 
     random_search.fit(X_train, y_train)
@@ -76,7 +85,13 @@ def train_and_evaluate(df):
     
     # 4. Calculate Feature Importance
     # HistGradientBoosting doesn't have .feature_importances_, so we use permutation_importance
-    result = permutation_importance(model, X_test, y_test, n_repeats=3, random_state=42)
+    result = permutation_importance(
+        model,
+        X_test,
+        y_test,
+        n_repeats=MODEL_PERMUTATION_REPEATS,
+        random_state=MODEL_RANDOM_STATE,
+    )
     fi_dict = dict(zip(X_test.columns, result.importances_mean))
     
     # 5. Generate Predictions for the ENTIRE dataset

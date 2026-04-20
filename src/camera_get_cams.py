@@ -1,19 +1,9 @@
-import os
-
 import requests
-from dotenv import load_dotenv
-
-
-load_dotenv()
-
-CAMERAS_JSON_URL = os.getenv(
-    "CAMERAS_JSON_URL",
-    "https://traveler.modot.org/timconfig/feed/desktop/StreamingCams2.json",
-)
+from config import CAMERAS_JSON_TIMEOUT_SECONDS, CAMERAS_JSON_URL
 
 
 def fetch_cameras():
-    response = requests.get(CAMERAS_JSON_URL, timeout=15)
+    response = requests.get(CAMERAS_JSON_URL, timeout=CAMERAS_JSON_TIMEOUT_SECONDS)
     response.raise_for_status()
     cams = response.json()
 

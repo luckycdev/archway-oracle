@@ -19,10 +19,21 @@ from camera_map import (
 )
 from camera_ui import render_camera_stats
 from camera_workers import get_processed_stream_url, get_worker_snapshot, list_camera_names, set_prediction_context
+from config import (
+    APP_PAGE_ICON,
+    APP_PAGE_LAYOUT,
+    APP_PAGE_TITLE,
+    CAMERA_LIVE_UPDATE_DEFAULT,
+    LIVE_STATS_REFRESH_INTERVAL,
+    PATIENCE_DEFAULT,
+    PATIENCE_MAX,
+    PATIENCE_MIN,
+    PATIENCE_STEP,
+)
 
 # --- 1. Page Configuration ---
-st.set_page_config(page_title="ArchWay Oracle: St. Louis Traffic Predictive Intelligence & Detector", layout="wide", page_icon="🚗")
-st.title("🚗 ArchWay Oracle: St. Louis Traffic Predictive Intelligence & Detector")
+st.set_page_config(page_title=APP_PAGE_TITLE, layout=APP_PAGE_LAYOUT, page_icon=APP_PAGE_ICON)
+st.title(f"{APP_PAGE_ICON} {APP_PAGE_TITLE}")
 
 # --- 2. Load Data & Model ---
 @st.cache_resource
@@ -84,10 +95,10 @@ st.sidebar.subheader("🧠 AI Persona")
 # Add a slider to let the user define how much they hate waiting
 patience = st.sidebar.slider(
     "Commuter Patience", 
-    min_value=100, 
-    max_value=1000, 
-    value=600, 
-    step=50,
+    min_value=PATIENCE_MIN,
+    max_value=PATIENCE_MAX,
+    value=PATIENCE_DEFAULT,
+    step=PATIENCE_STEP,
     help="Higher = Wants to leave ASAP. Lower = Willing to wait for clear roads."
 )
 
@@ -253,12 +264,13 @@ else:
 
 toggle_col_1, toggle_col_2 = st.columns([1, 1])
 with toggle_col_2:
-    live_update = st.checkbox("Live update selected camera", value=True, key="live_camera_updates")
+    live_update = st.checkbox(
+        "Live update selected camera",
+        value=CAMERA_LIVE_UPDATE_DEFAULT,
+        key="live_camera_updates",
+    )
 
 selected_camera = st.session_state.selected_camera
-
-LIVE_STATS_REFRESH_INTERVAL = "450ms"
-
 
 def render_processed_stream_html(stream_url, height=560):
     safe_stream_url = escape(stream_url or "", quote=True)

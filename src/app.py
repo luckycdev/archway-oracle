@@ -19,7 +19,7 @@ from camera_map import (
     load_camera_points,
 )
 from camera_ui import render_camera_stats
-from camera_workers import get_processed_stream_url, get_worker_snapshot, list_camera_names, set_prediction_context
+from camera_workers import get_processed_stream_url, get_worker_snapshot, list_camera_names, set_prediction_context, get_yolo_model
 from config import (
     APP_PAGE_ICON,
     APP_PAGE_LAYOUT,
@@ -30,13 +30,27 @@ from config import (
     PATIENCE_MAX,
     PATIENCE_MIN,
     PATIENCE_STEP,
+    PROCESSED_STREAM_PORT,
 )
 
 # --- 1. Page Configuration ---
 st.set_page_config(page_title=APP_PAGE_TITLE, layout=APP_PAGE_LAYOUT, page_icon=APP_PAGE_ICON)
 st.title(f"{APP_PAGE_ICON} {APP_PAGE_TITLE}")
 
-# --- 2. Load Data & Model ---
+# --- 2. Initialize YOLO Model with Device Selection ---
+@st.cache_resource
+def init_yolo_model():
+    print("\n" + "="*70, flush=True)
+    print("INITIALIZING YOLO MODEL ON APP STARTUP", flush=True)
+    print("="*70, flush=True)
+    model = get_yolo_model()
+    print("="*70, flush=True)
+    return model
+
+with st.spinner("Initializing Computer Vision Model..."):
+    init_yolo_model()
+
+# --- 3. Load Data & Model ---
 @st.cache_resource
 def get_data_and_model():
     df = load_and_prep_data()
@@ -47,7 +61,7 @@ def get_data_and_model():
 with st.spinner("Analyzing St. Louis Road Network..."):
     full_data, test_results, ai_mae, baseline_mae, winning_params, feature_importances = get_data_and_model()
 
-# --- 3. Sidebar Controls ---
+# --- 4. Sidebar Controls ---
 st.sidebar.header("🕹️ Control Panel")
 
 # Select Primary Roadway
@@ -290,6 +304,13 @@ def _resolve_stream_url_for_client(stream_url):
     if not isinstance(stream_url, str) or not stream_url:
         return ""
 
+    request_host = _get_request_hostname()
+
+    if stream_url.startswith("/"):
+        if request_host in {"localhost", "127.0.0.1", "0.0.0.0"}:
+            return f"http://{request_host}:{PROCESSED_STREAM_PORT}{stream_url}"
+        return stream_url
+
     try:
         parts = urlsplit(stream_url)
     except Exception:
@@ -298,7 +319,6 @@ def _resolve_stream_url_for_client(stream_url):
     if parts.hostname not in {"127.0.0.1", "localhost", "0.0.0.0"}:
         return stream_url
 
-    request_host = _get_request_hostname()
     if not request_host:
         return stream_url
 

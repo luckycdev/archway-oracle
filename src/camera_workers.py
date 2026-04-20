@@ -59,9 +59,103 @@ prediction_context_lock = Lock()
 prediction_context = {}
 camera_workers = {}
 _loaded_model = None
+_selected_device = None  # Store the selected YOLO device for reuse
 processed_stream_lock = Lock()
 processed_stream_server = None
 processed_stream_thread = None
+
+
+def select_and_test_yolo_device():
+    """
+    Select and test YOLO device with immediate console output.
+    Tests the configured device and falls back to alternatives if needed.
+    Returns the working device name.
+    """
+    configured_device = str(YOLO_DEVICE).strip() if YOLO_DEVICE is not None else "0"
+    print(f"[YOLO Device Selection] Configured device: {configured_device}", flush=True)
+    
+    import torch
+    
+    # Build candidate devices to try
+    candidates = []
+    
+    # Add configured device first
+    if configured_device.lower() in {"cpu", "mps"}:
+        candidates.append(configured_device.lower())
+    else:
+        try:
+            candidates.append(str(int(configured_device)))  # Normalize GPU index
+        except ValueError:
+            candidates.append("0")  # Default to GPU 0
+    
+    # Add fallback options: GPU 0, GPU 1, CPU
+    if torch.cuda.is_available():
+        gpu_count = torch.cuda.device_count()
+        print(f"[YOLO Device Selection] CUDA available - found {gpu_count} GPU(s)", flush=True)
+        for i in range(gpu_count):
+            if str(i) not in candidates:
+                candidates.append(str(i))
+    else:
+        print("[YOLO Device Selection] CUDA not available", flush=True)
+    
+    if "cpu" not in candidates:
+        candidates.append("cpu")
+    
+    # Try each candidate
+    selected_device = None
+    for candidate_device in candidates:
+        try:
+            print(f"[YOLO Device Selection] Testing device: {candidate_device}...", end=" ", flush=True)
+            
+            # Try a simple tensor operation to validate device
+            if candidate_device.lower() == "cpu":
+                test_tensor = torch.zeros(1, device="cpu")
+            elif candidate_device.lower() == "mps":
+                test_tensor = torch.zeros(1, device="mps")
+            else:
+                # Try GPU device
+                device_idx = int(candidate_device)
+                if device_idx >= torch.cuda.device_count():
+                    print(f"FAILED (GPU {device_idx} not available)", flush=True)
+                    continue
+                test_tensor = torch.zeros(1, device=f"cuda:{device_idx}")
+                device_name = torch.cuda.get_device_name(device_idx)
+                print(f"OK (found: {device_name})", flush=True)
+            
+            if test_tensor is not None:
+                selected_device = candidate_device if candidate_device != "0" or torch.cuda.is_available() else candidate_device
+                if candidate_device not in {"cpu", "mps"}:
+                    selected_device = candidate_device
+                else:
+                    selected_device = candidate_device
+                print(f"[YOLO Device Selection] ✓ Selected device: {selected_device}", flush=True)
+                return selected_device
+                
+        except Exception as exc:
+            print(f"FAILED ({type(exc).__name__}: {str(exc)[:50]})", flush=True)
+            continue
+    
+    # Fallback to CPU if all else fails
+    print("[YOLO Device Selection] ✓ All GPU devices failed, falling back to CPU", flush=True)
+    return "cpu"
+
+
+def get_effective_yolo_device():
+    """Deprecated - use select_and_test_yolo_device() instead."""
+    configured_device = str(YOLO_DEVICE).strip() if YOLO_DEVICE is not None else "0"
+    if configured_device.lower() in {"cpu", "mps"}:
+        return configured_device.lower()
+
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return configured_device
+    except Exception:
+        pass
+
+    LOGGER.warning("CUDA unavailable for YOLO_DEVICE=%s; falling back to CPU", configured_device)
+    return "cpu"
 
 
 def normalize_video_source(source_value):
@@ -315,15 +409,19 @@ def get_empty_stats(camera_name):
 
 
 def get_yolo_model():
-    global _loaded_model
+    global _loaded_model, _selected_device
     with model_lock:
         if _loaded_model is None:
             try:
                 import torch
 
-                if YOLO_DEVICE not in {"cpu", "mps"} and torch.cuda.is_available():
+                # Select and test device with console output (only happens once)
+                _selected_device = select_and_test_yolo_device()
+                print(f"[YOLO Model Init] Using device: {_selected_device}", flush=True)
+                
+                if _selected_device not in {"cpu", "mps"} and torch.cuda.is_available():
                     try:
-                        device_index = int(str(YOLO_DEVICE).strip())
+                        device_index = int(str(_selected_device).strip())
                     except ValueError:
                         device_index = 0
 
@@ -331,14 +429,17 @@ def get_yolo_model():
                     total_vram_gb = total_vram_bytes / (1024 ** 3)
                     if total_vram_gb > 0:
                         memory_fraction = min(max(YOLO_MAX_VRAM_GB / total_vram_gb, 0.0), 0.99)
+                        print(f"[YOLO Model Init] GPU {device_index}: {total_vram_gb:.2f}GB total, capping to {YOLO_MAX_VRAM_GB}GB ({memory_fraction*100:.1f}%)", flush=True)
                         torch.cuda.set_device(device_index)
                         torch.cuda.set_per_process_memory_fraction(memory_fraction, device=device_index)
             except Exception as exc:
                 LOGGER.warning("Unable to apply YOLO CUDA memory cap: %s", exc)
 
+            print(f"[YOLO Model Init] Loading model: {YOLO_MODEL}", flush=True)
             from ultralytics import YOLO
 
             _loaded_model = YOLO(YOLO_MODEL)
+            print(f"[YOLO Model Init] Model loaded successfully", flush=True)
         return _loaded_model
 
 
@@ -466,7 +567,13 @@ class CameraWorker:
                     scale_y = frame_height / float(resized_height)
 
                 with model_lock:
-                    results = model.predict(inference_frame, conf=YOLO_CONFIDENCE, classes=YOLO_CLASS_IDS, device = YOLO_DEVICE, verbose=False)
+                    results = model.predict(
+                        inference_frame,
+                        conf=YOLO_CONFIDENCE,
+                        classes=YOLO_CLASS_IDS,
+                        device=_selected_device,
+                        verbose=False,
+                    )
 
                 refreshed_detections = []
                 for result in results:

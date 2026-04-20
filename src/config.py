@@ -59,7 +59,7 @@ def _get_int_list(name: str, default: List[int]) -> List[int]:
 
 
 # App UI
-APP_PAGE_TITLE = _get_str("APP_PAGE_TITLE", "ArchWay Oracle: St. Louis Traffic Predictive Intelligence & Detector")
+APP_PAGE_TITLE = _get_str("APP_PAGE_TITLE", "Archway Oracle: St. Louis Traffic Predictive Intelligence & Detector")
 APP_PAGE_ICON = _get_str("APP_PAGE_ICON", "🚗")
 APP_PAGE_LAYOUT = _get_str("APP_PAGE_LAYOUT", "wide")
 LIVE_STATS_REFRESH_INTERVAL = _get_str("LIVE_STATS_REFRESH_INTERVAL", "450ms")

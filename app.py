@@ -23,8 +23,8 @@ from camera_workers import get_processed_stream_url, get_worker_snapshot, list_c
 
 
 # --- 1. Page Configuration ---
-st.set_page_config(page_title="ArchWay Oracle: St. Louis Traffic Predictive Intelligence & Detector", layout="wide", page_icon="🚗")
-st.title("🚗 ArchWay Oracle: St. Louis Traffic Predictive Intelligence & Detector")
+st.set_page_config(page_title="Archway Oracle: St. Louis Traffic Predictive Intelligence & Detector", layout="wide", page_icon="🚗")
+st.title("🚗 Archway Oracle: St. Louis Traffic Predictive Intelligence & Detector")
 
 # --- 2. Load Data & Model ---
 @st.cache_resource

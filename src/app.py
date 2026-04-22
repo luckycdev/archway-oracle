@@ -220,6 +220,12 @@ camera_name_set = set(camera_names)
 if "selected_camera" not in st.session_state:
     st.session_state.selected_camera = None
 
+if "selected_camera_source" not in st.session_state:
+    st.session_state.selected_camera_source = None
+
+if "camera_map_key_version" not in st.session_state:
+    st.session_state.camera_map_key_version = 0
+
 if "map_dark_mode" not in st.session_state:
     st.session_state.map_dark_mode = False
 
@@ -227,22 +233,27 @@ if st.session_state.selected_camera not in camera_name_set:
     st.session_state.selected_camera = None
 
 camera_selector_options = ["No camera"] + camera_names
-current_camera_option = st.session_state.selected_camera if st.session_state.selected_camera in camera_name_set else "No camera"
+selector_value = st.session_state.selected_camera if st.session_state.selected_camera in camera_name_set else "No camera"
+if st.session_state.get("camera_selector") != selector_value:
+    st.session_state.camera_selector = selector_value
 
-if st.session_state.get("camera_selector") != current_camera_option:
-    st.session_state["camera_selector"] = current_camera_option
 
-picked_camera_option = st.selectbox(
+def _on_camera_selector_change():
+    selected_option = st.session_state.get("camera_selector", "No camera")
+    selected_name = None if selected_option == "No camera" else selected_option
+    if selected_name != st.session_state.selected_camera:
+        st.session_state.selected_camera = selected_name
+        st.session_state.selected_camera_source = "dropdown"
+        # Force a fresh map widget so persisted point selection cannot override dropdown choice.
+        st.session_state.camera_map_key_version += 1
+
+
+st.selectbox(
     "Active Camera",
     camera_selector_options,
-    index=camera_selector_options.index(current_camera_option),
     key="camera_selector",
+    on_change=_on_camera_selector_change,
 )
-
-picked_camera = None if picked_camera_option == "No camera" else picked_camera_option
-if picked_camera != st.session_state.selected_camera:
-    st.session_state.selected_camera = picked_camera
-    st.rerun()
 
 road_reference_row = segment_df[segment_df['DateTime'] == selected_date]
 if road_reference_row.empty:
@@ -261,6 +272,7 @@ if along_road:
         camera_name = item["camera"].get("location", "Unknown camera")
         if st.button(camera_name, key=f"along_road_camera_{idx}_{camera_name}", width="stretch"):
             st.session_state.selected_camera = camera_name
+            st.session_state.selected_camera_source = "road_list"
             st.rerun()
 else:
     st.caption("No named camera matches found for this road.")
@@ -273,6 +285,7 @@ if near_road:
         label = f"{camera_name} ({item['direction']}, {item['miles']:.1f} mi)"
         if st.button(label, key=f"near_road_camera_{idx}_{camera_name}", width="stretch"):
             st.session_state.selected_camera = camera_name
+            st.session_state.selected_camera_source = "nearby_list"
             st.rerun()
 else:
     st.caption("No nearby camera points found.")
@@ -361,6 +374,7 @@ def render_live_camera_stats():
     selected_from_stats_nearby = render_camera_stats(camera_stats, camera_points, key_prefix="camera_stats")
     if selected_from_stats_nearby and selected_from_stats_nearby != st.session_state.selected_camera:
         st.session_state.selected_camera = selected_from_stats_nearby
+        st.session_state.selected_camera_source = "stats_nearby"
         st.rerun()
 
 
@@ -389,6 +403,7 @@ else:
         selected_from_stats_nearby = render_camera_stats(camera_stats, camera_points, key_prefix="camera_stats_static")
         if selected_from_stats_nearby and selected_from_stats_nearby != st.session_state.selected_camera:
             st.session_state.selected_camera = selected_from_stats_nearby
+            st.session_state.selected_camera_source = "stats_nearby"
             st.rerun()
     else:
         st.info("Click a camera on the map to start a worker and view its live feed.")
@@ -428,11 +443,12 @@ if camera_points:
             width="stretch",
             on_select="rerun",
             selection_mode="points",
-            key="camera_map",
+            key=f"camera_map_{st.session_state.camera_map_key_version}",
         )
     selected_from_map = extract_selected_camera_from_map_event(map_selection)
     if selected_from_map and selected_from_map != st.session_state.selected_camera:
         st.session_state.selected_camera = selected_from_map
+        st.session_state.selected_camera_source = "map"
         st.rerun()
 else:
     st.warning("No camera map points are currently available.")

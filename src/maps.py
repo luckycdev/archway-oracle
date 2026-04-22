@@ -1,17 +1,6 @@
 import streamlit as st
 import streamlit.components.v1 as components
 
-def show_map_legend():
-    """Displays a legend for the traffic colors and comparison marker."""
-    st.markdown("""
-        <div style="display: flex; gap: 15px; font-size: 0.85em; margin-bottom: 10px; font-weight: bold; flex-wrap: wrap;">
-            <span style="color: #28a745;">● Clear</span>
-            <span style="color: #ffc107;">● Moderate</span>
-            <span style="color: #dc3545;">● Heavy</span>
-            <span style="color: #007bff;">● Comparison Road</span>
-        </div>
-    """, unsafe_allow_html=True)
-
 def build_google_map(df, selected_segment, api_key, secondary_segment=None):
     """
     Renders the Google Map with support for Primary and Secondary road highlighting.

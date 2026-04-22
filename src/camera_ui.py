@@ -1,6 +1,7 @@
 import streamlit as st
 
 from camera_map import get_nearby_cameras
+from camera_workers import get_camera_display_name
 
 
 def render_camera_stats(stats, camera_points, key_prefix="stats"):
@@ -54,7 +55,7 @@ def render_camera_stats(stats, camera_points, key_prefix="stats"):
         else:
             for idx, item in enumerate(nearby):
                 camera_name = item["camera"]["location"]
-                label = f"{camera_name} ({item['direction']}, {item['miles']:.1f} mi)"
+                label = f"{get_camera_display_name(camera_name)} ({item['direction']}, {item['miles']:.1f} mi)"
                 if st.button(label, key=f"{key_prefix}_nearby_{idx}_{camera_name}", width="stretch"):
                     selected_from_nearby = camera_name
 

@@ -1,18 +1,26 @@
 import logging
 import math
+import os
 import re
 import time
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from urllib.parse import quote, unquote, urlparse
-
-import cv2
-import numpy as np
 
 from camera_get_cams import fetch_cameras
 from config import (
+    CAMERA_BACKGROUND_DWELL_SECONDS,
+    CAMERA_BACKGROUND_FRAME_STRIDE,
+    CAMERA_BACKGROUND_SAMPLE_SECONDS,
+    CAMERA_BACKGROUND_SCAN_ENABLED,
+    CAMERA_BACKGROUND_WORKERS,
     CAMERA_BUFFER_SIZE,
     CAMERA_FRAME_DROP_GRABS,
+    CAMERA_CAPTURE_OPEN_TIMEOUT_MS,
+    CAMERA_CAPTURE_READ_TIMEOUT_MS,
+    CAMERA_CAPTURE_RETRY_BACKOFF_SECONDS,
+    CAMERA_SUPPRESS_OPENCV_LOGS,
     COVERAGE_SMOOTHING_ALPHA,
     DEFAULT_CAMERA_NAME,
     DEFAULT_STREAM_SOURCE,
@@ -51,6 +59,9 @@ from config import (
     YOLO_PROCESS_MAX_WIDTH,
 )
 
+import cv2
+import numpy as np
+
 LOGGER = logging.getLogger(__name__)
 
 model_lock = Lock()
@@ -63,6 +74,125 @@ _selected_device = None  # Store the selected YOLO device for reuse
 processed_stream_lock = Lock()
 processed_stream_server = None
 processed_stream_thread = None
+background_sampler_lock = Lock()
+camera_status_lock = Lock()
+background_queue_lock = Lock()
+background_scan_state_lock = Lock()
+background_stop_event = Event()
+background_threads = []
+background_queue = deque()
+background_active_cameras = set()
+camera_background_status = {}
+
+STATUS_BADGE_LIGHT = "🟢"
+STATUS_BADGE_MEDIUM = "🟡"
+STATUS_BADGE_HEAVY = "🟠"
+STATUS_BADGE_EXTREME = "🔴"
+STATUS_BADGE_NO_FEED = "⚫"
+STATUS_PREFIXES = (
+    f"{STATUS_BADGE_LIGHT} ",
+    f"{STATUS_BADGE_MEDIUM} ",
+    f"{STATUS_BADGE_HEAVY} ",
+    f"{STATUS_BADGE_EXTREME} ",
+    f"{STATUS_BADGE_NO_FEED} ",
+)
+camera_open_retry_state = {}
+
+
+def _silence_opencv_logging():
+    if not CAMERA_SUPPRESS_OPENCV_LOGS:
+        return
+
+    try:
+        if hasattr(cv2, "utils") and hasattr(cv2.utils, "logging") and hasattr(cv2.utils.logging, "LOG_LEVEL_SILENT"):
+            cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_SILENT)
+            return
+    except Exception:
+        pass
+
+    try:
+        if hasattr(cv2, "setLogLevel") and hasattr(cv2, "LOG_LEVEL_SILENT"):
+            cv2.setLogLevel(cv2.LOG_LEVEL_SILENT)
+            return
+    except Exception:
+        pass
+
+    try:
+        if hasattr(cv2, "setLogLevel"):
+            cv2.setLogLevel(0)
+    except Exception:
+        pass
+
+
+def _redirect_stderr_to_null():
+    try:
+        stderr_fd = 2
+        devnull_fd = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull_fd, stderr_fd)
+        os.close(devnull_fd)
+    except Exception:
+        pass
+
+
+_silence_opencv_logging()
+if CAMERA_SUPPRESS_OPENCV_LOGS:
+    _redirect_stderr_to_null()
+
+
+def _camera_open_retry_key(source_value):
+    return str(source_value)
+
+
+def _camera_open_is_allowed(source_value):
+    retry_key = _camera_open_retry_key(source_value)
+    next_retry_at = camera_open_retry_state.get(retry_key)
+    return next_retry_at is None or time.monotonic() >= next_retry_at
+
+
+def _mark_camera_open_failed(source_value):
+    retry_key = _camera_open_retry_key(source_value)
+    camera_open_retry_state[retry_key] = time.monotonic() + CAMERA_CAPTURE_RETRY_BACKOFF_SECONDS
+
+
+def _mark_camera_open_success(source_value):
+    retry_key = _camera_open_retry_key(source_value)
+    camera_open_retry_state.pop(retry_key, None)
+
+
+def open_video_capture(source_value):
+    if not _camera_open_is_allowed(source_value):
+        return None
+
+    params = []
+    if hasattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC"):
+        params.extend([cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, CAMERA_CAPTURE_OPEN_TIMEOUT_MS])
+    if hasattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC"):
+        params.extend([cv2.CAP_PROP_READ_TIMEOUT_MSEC, CAMERA_CAPTURE_READ_TIMEOUT_MS])
+
+    try:
+        if params:
+            capture = cv2.VideoCapture(source_value, cv2.CAP_FFMPEG, params)
+            if capture is not None and capture.isOpened():
+                _mark_camera_open_success(source_value)
+                return capture
+            _mark_camera_open_failed(source_value)
+            return capture
+    except Exception:
+        _mark_camera_open_failed(source_value)
+        pass
+
+    try:
+        capture = cv2.VideoCapture(source_value)
+        if capture is not None and capture.isOpened():
+            if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
+                capture.set(cv2.CAP_PROP_BUFFERSIZE, CAMERA_BUFFER_SIZE)
+            _mark_camera_open_success(source_value)
+        else:
+            _mark_camera_open_failed(source_value)
+        return capture
+    except Exception:
+        _mark_camera_open_failed(source_value)
+        return None
 
 
 def select_and_test_yolo_device():
@@ -213,11 +343,203 @@ camera_sources = load_camera_sources()
 default_source = normalize_video_source(VIDEO_SOURCE)
 
 
+def reload_camera_sources():
+    global camera_sources, default_camera_name
+
+    refreshed_sources = load_camera_sources()
+
+    camera_sources.clear()
+    camera_sources.update(refreshed_sources)
+
+    default_camera_name = resolve_default_camera_name()
+
+    with background_queue_lock:
+        background_queue.clear()
+        background_queue.extend(camera_sources.keys())
+
+    with background_scan_state_lock:
+        background_active_cameras.clear()
+
+    with camera_status_lock:
+        current_names = set(camera_sources.keys())
+        for camera_name in list(camera_background_status.keys()):
+            if camera_name not in current_names:
+                camera_background_status.pop(camera_name, None)
+
+        for camera_name in current_names:
+            camera_background_status.setdefault(camera_name, _get_default_status(camera_name))
+
+    return list(camera_sources.keys())
+
+
 def get_camera_raw_stream_url(camera_name):
     stream_source = camera_sources.get(camera_name)
     if isinstance(stream_source, str) and stream_source.startswith(("http://", "https://")):
         return stream_source
     return ""
+
+
+def _badge_from_traffic_label(traffic_label):
+    if traffic_label == "Light Traffic":
+        return STATUS_BADGE_LIGHT
+    if traffic_label == "Moderate Traffic":
+        return STATUS_BADGE_MEDIUM
+    if traffic_label == "Heavy Traffic":
+        return STATUS_BADGE_HEAVY
+    if traffic_label == "Very Heavy Traffic":
+        return STATUS_BADGE_EXTREME
+    return STATUS_BADGE_NO_FEED
+
+
+def _get_default_status(camera_name):
+    return {
+        "camera_name": camera_name,
+        "badge": STATUS_BADGE_NO_FEED,
+        "traffic_label": "No Feed",
+        "traffic_score": None,
+        "vehicle_count": 0,
+        "movement_counts": {"stopped": 0, "slow": 0, "fast": 0},
+        "last_sampled": "",
+    }
+
+
+def _set_camera_background_status(camera_name, badge, traffic_label, traffic_score, stats=None):
+    movement_counts = {"stopped": 0, "slow": 0, "fast": 0}
+    vehicle_count = 0
+    if isinstance(stats, dict):
+        movement_counts = dict(stats.get("movement_counts", movement_counts) or movement_counts)
+        vehicle_count = int(stats.get("vehicle_count", 0) or 0)
+
+    with camera_status_lock:
+        camera_background_status[camera_name] = {
+            "camera_name": camera_name,
+            "badge": badge,
+            "traffic_label": traffic_label,
+            "traffic_score": None if traffic_score is None else round(float(traffic_score), 2),
+            "vehicle_count": vehicle_count,
+            "movement_counts": movement_counts,
+            "last_sampled": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+
+def get_camera_background_status(camera_name):
+    with camera_status_lock:
+        return dict(camera_background_status.get(camera_name, _get_default_status(camera_name)))
+
+
+def resolve_camera_name(camera_name_or_display):
+    if camera_name_or_display in camera_sources:
+        return camera_name_or_display
+
+    if not isinstance(camera_name_or_display, str):
+        return camera_name_or_display
+
+    cleaned = camera_name_or_display.strip()
+    for prefix in STATUS_PREFIXES:
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix) :]
+            break
+
+    return cleaned
+
+
+def get_camera_display_name(camera_name):
+    raw_name = resolve_camera_name(camera_name)
+    if not CAMERA_BACKGROUND_SCAN_ENABLED:
+        return raw_name
+
+    status = get_camera_background_status(raw_name)
+    badge = status.get("badge", STATUS_BADGE_NO_FEED)
+    return f"{badge} {raw_name}"
+
+
+def _sample_camera_traffic(camera_name, sample_seconds=CAMERA_BACKGROUND_SAMPLE_SECONDS):
+    worker = get_or_create_worker(camera_name)
+    started = time.monotonic()
+
+    while time.monotonic() - started < sample_seconds:
+        worker.touch()
+        time.sleep(min(0.5, max(sample_seconds - (time.monotonic() - started), 0.1)))
+
+    _, stats = get_worker_snapshot(camera_name)
+    if not isinstance(stats, dict):
+        return STATUS_BADGE_NO_FEED, "No Feed", None, None
+
+    if not stats.get("last_updated") or stats.get("resolution") is None:
+        return STATUS_BADGE_NO_FEED, "No Feed", None, stats
+
+    traffic_score = stats.get("traffic_score")
+    traffic_label = stats.get("traffic_label")
+    if traffic_score is None or not traffic_label:
+        return STATUS_BADGE_NO_FEED, "No Feed", None, stats
+
+    return _badge_from_traffic_label(traffic_label), traffic_label, traffic_score, stats
+
+
+def _background_sampler_loop():
+    while not background_stop_event.is_set():
+        camera_name = None
+
+        with background_queue_lock:
+            if not background_queue:
+                background_queue.extend(camera_sources.keys())
+
+            queue_length = len(background_queue)
+            for _ in range(queue_length):
+                candidate = background_queue.popleft()
+                with background_scan_state_lock:
+                    if candidate in background_active_cameras:
+                        background_queue.append(candidate)
+                        continue
+
+                    background_active_cameras.add(candidate)
+                    camera_name = candidate
+                    break
+
+        if not camera_name:
+            time.sleep(0.2)
+            continue
+
+        try:
+            badge, traffic_label, traffic_score, stats = _sample_camera_traffic(camera_name)
+            _set_camera_background_status(camera_name, badge, traffic_label, traffic_score, stats=stats)
+        except Exception as exc:
+            LOGGER.warning("Background sample failed for %s: %s", camera_name, exc)
+            _set_camera_background_status(camera_name, STATUS_BADGE_NO_FEED, "No Feed", None)
+        finally:
+            with background_scan_state_lock:
+                background_active_cameras.discard(camera_name)
+
+            with background_queue_lock:
+                background_queue.append(camera_name)
+
+        if CAMERA_BACKGROUND_DWELL_SECONDS > 0:
+            time.sleep(CAMERA_BACKGROUND_DWELL_SECONDS)
+
+
+def ensure_background_camera_sampler():
+    if not CAMERA_BACKGROUND_SCAN_ENABLED:
+        return False
+
+    with background_sampler_lock:
+        alive_threads = [thread for thread in background_threads if thread.is_alive()]
+        if len(alive_threads) >= CAMERA_BACKGROUND_WORKERS:
+            return True
+
+        background_threads[:] = alive_threads
+        if not background_queue:
+            background_queue.extend(camera_sources.keys())
+
+        with camera_status_lock:
+            for camera_name in camera_sources:
+                camera_background_status.setdefault(camera_name, _get_default_status(camera_name))
+
+        while len(background_threads) < CAMERA_BACKGROUND_WORKERS:
+            thread = Thread(target=_background_sampler_loop, daemon=True)
+            thread.start()
+            background_threads.append(thread)
+
+    return True
 
 
 def resolve_default_camera_name():
@@ -476,7 +798,7 @@ class CameraWorker:
             return self.active_viewers == 0 and idle_seconds > WORKER_IDLE_TIMEOUT_SECONDS
 
     def run(self):
-        cam = cv2.VideoCapture(self.camera_source)
+        cam = open_video_capture(self.camera_source)
         if cam is not None and cam.isOpened():
             cam.set(cv2.CAP_PROP_BUFFERSIZE, CAMERA_BUFFER_SIZE)
         road_mask = None
@@ -524,7 +846,7 @@ class CameraWorker:
                         self.latest_stats = get_empty_stats(self.camera_name)
                         self.latest_stats["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
                 time.sleep(0.5)
-                cam = cv2.VideoCapture(self.camera_source)
+                cam = open_video_capture(self.camera_source)
                 if cam is not None and cam.isOpened():
                     cam.set(cv2.CAP_PROP_BUFFERSIZE, CAMERA_BUFFER_SIZE)
                 road_mask = None
@@ -539,6 +861,9 @@ class CameraWorker:
 
             ok, frame = cam.read()
             if not ok or frame is None:
+                cam.release()
+                cam = None
+                _mark_camera_open_failed(self.camera_source)
                 time.sleep(0.05)
                 continue
 
@@ -727,6 +1052,7 @@ class CameraWorker:
 
 
 def get_or_create_worker(camera_name):
+    camera_name = resolve_camera_name(camera_name)
     if camera_name not in camera_sources:
         camera_name = default_camera_name
 
@@ -741,6 +1067,7 @@ def get_or_create_worker(camera_name):
 
 
 def get_worker_snapshot(camera_name):
+    camera_name = resolve_camera_name(camera_name)
     worker = get_or_create_worker(camera_name)
     worker.touch()
     with worker.lock:

@@ -19,11 +19,26 @@ from camera_map import (
     load_camera_points,
 )
 from camera_ui import render_camera_stats
-from camera_workers import get_processed_stream_url, get_worker_snapshot, list_camera_names, set_prediction_context, get_yolo_model
+from camera_workers import (
+    ensure_background_camera_sampler,
+    get_camera_background_status,
+    get_camera_display_name,
+    get_processed_stream_url,
+    get_worker_snapshot,
+    list_camera_names,
+    reload_camera_sources,
+    resolve_camera_name,
+    set_prediction_context,
+    get_yolo_model,
+)
 from config import (
     APP_PAGE_ICON,
     APP_PAGE_LAYOUT,
     APP_PAGE_TITLE,
+    CAMERA_BACKGROUND_DWELL_SECONDS,
+    CAMERA_BACKGROUND_SAMPLE_SECONDS,
+    CAMERA_BACKGROUND_SCAN_ENABLED,
+    CAMERA_BACKGROUND_WORKERS,
     CAMERA_LIVE_UPDATE_DEFAULT,
     LIVE_STATS_REFRESH_INTERVAL,
     PATIENCE_DEFAULT,
@@ -37,7 +52,18 @@ from config import (
 st.set_page_config(page_title=APP_PAGE_TITLE, layout=APP_PAGE_LAYOUT, page_icon=APP_PAGE_ICON)
 st.title(f"{APP_PAGE_ICON} {APP_PAGE_TITLE}")
 
-# --- 2. Initialize YOLO Model with Device Selection ---
+# --- 2. Load Data & Model ---
+@st.cache_resource
+def get_data_and_model():
+    df = load_and_prep_data()
+    # Added feature_importances to the return
+    test_data, ai_mae, baseline_mae, cv_scores, winning_params, feature_importances = train_and_evaluate(df)
+    return df, test_data, ai_mae, baseline_mae, winning_params, feature_importances
+
+with st.spinner("Analyzing St. Louis Road Network..."):
+    full_data, test_results, ai_mae, baseline_mae, winning_params, feature_importances = get_data_and_model()
+
+# --- 3. Initialize YOLO Model with Device Selection ---
 @st.cache_resource
 def init_yolo_model():
     print("\n" + "="*70, flush=True)
@@ -50,16 +76,7 @@ def init_yolo_model():
 with st.spinner("Initializing Computer Vision Model..."):
     init_yolo_model()
 
-# --- 3. Load Data & Model ---
-@st.cache_resource
-def get_data_and_model():
-    df = load_and_prep_data()
-    # Added feature_importances to the return
-    test_data, ai_mae, baseline_mae, cv_scores, winning_params, feature_importances = train_and_evaluate(df)
-    return df, test_data, ai_mae, baseline_mae, winning_params, feature_importances
-
-with st.spinner("Analyzing St. Louis Road Network..."):
-    full_data, test_results, ai_mae, baseline_mae, winning_params, feature_importances = get_data_and_model()
+ensure_background_camera_sampler()
 
 # --- 4. Sidebar Controls ---
 st.sidebar.header("🕹️ Control Panel")
@@ -211,244 +228,292 @@ with col_right:
 
 # --- 7. Bottom Row: Live Spatial View (Map) ---
 st.markdown("---")
-st.subheader("🗺️ Live Camera Map")
+def render_camera_background_ui():
+    st.subheader("🗺️ Live Camera Map")
 
-camera_points = load_camera_points(allowed_locations=list_camera_names())
-camera_names = [point["location"] for point in camera_points]
-camera_name_set = set(camera_names)
-
-if "selected_camera" not in st.session_state:
-    st.session_state.selected_camera = None
-
-if "selected_camera_source" not in st.session_state:
-    st.session_state.selected_camera_source = None
-
-if "camera_map_key_version" not in st.session_state:
-    st.session_state.camera_map_key_version = 0
-
-if "map_dark_mode" not in st.session_state:
-    st.session_state.map_dark_mode = False
-
-if st.session_state.selected_camera not in camera_name_set:
-    st.session_state.selected_camera = None
-
-camera_selector_options = ["No camera"] + camera_names
-selector_value = st.session_state.selected_camera if st.session_state.selected_camera in camera_name_set else "No camera"
-if st.session_state.get("camera_selector") != selector_value:
-    st.session_state.camera_selector = selector_value
-
-
-def _on_camera_selector_change():
-    selected_option = st.session_state.get("camera_selector", "No camera")
-    selected_name = None if selected_option == "No camera" else selected_option
-    if selected_name != st.session_state.selected_camera:
-        st.session_state.selected_camera = selected_name
-        st.session_state.selected_camera_source = "dropdown"
-        # Force a fresh map widget so persisted point selection cannot override dropdown choice.
-        st.session_state.camera_map_key_version += 1
-
-
-st.selectbox(
-    "Active Camera",
-    camera_selector_options,
-    key="camera_selector",
-    on_change=_on_camera_selector_change,
-)
-
-road_reference_row = segment_df[segment_df['DateTime'] == selected_date]
-if road_reference_row.empty:
-    road_reference_row = segment_df.head(1)
-
-road_latitude = None
-road_longitude = None
-if not road_reference_row.empty:
-    road_latitude = float(road_reference_row['gps_latitude'].iloc[0])
-    road_longitude = float(road_reference_row['gps_longitude'].iloc[0])
-
-st.markdown("### Cameras Along This Road")
-along_road = get_cameras_along_road(camera_points, selected_segment)
-if along_road:
-    for idx, item in enumerate(along_road):
-        camera_name = item["camera"].get("location", "Unknown camera")
-        if st.button(camera_name, key=f"along_road_camera_{idx}_{camera_name}", width="stretch"):
-            st.session_state.selected_camera = camera_name
-            st.session_state.selected_camera_source = "road_list"
+    _, refresh_col_2 = st.columns([6, 2])
+    with refresh_col_2:
+        if st.button("Refresh camera list", key="refresh_camera_list_button", width="stretch"):
+            reload_camera_sources()
             st.rerun()
-else:
-    st.caption("No named camera matches found for this road.")
 
-st.markdown("### Cameras Near This Road")
-near_road = get_cameras_near_road(camera_points, road_latitude, road_longitude)
-if near_road:
-    for idx, item in enumerate(near_road):
-        camera_name = item["camera"]["location"]
-        label = f"{camera_name} ({item['direction']}, {item['miles']:.1f} mi)"
-        if st.button(label, key=f"near_road_camera_{idx}_{camera_name}", width="stretch"):
-            st.session_state.selected_camera = camera_name
-            st.session_state.selected_camera_source = "nearby_list"
-            st.rerun()
-else:
-    st.caption("No nearby camera points found.")
+    camera_names = list_camera_names()
+    camera_points = load_camera_points(allowed_locations=camera_names)
+    camera_display_map = {camera_name: get_camera_display_name(camera_name) for camera_name in camera_names}
+    display_to_camera = {display_name: camera_name for camera_name, display_name in camera_display_map.items()}
+    camera_name_set = set(camera_names)
 
-toggle_col_1, toggle_col_2 = st.columns([1, 1])
-with toggle_col_2:
-    live_update = st.checkbox(
-        "Live update selected camera",
-        value=CAMERA_LIVE_UPDATE_DEFAULT,
-        key="live_camera_updates",
+    if "selected_camera" not in st.session_state:
+        st.session_state.selected_camera = None
+
+    if "selected_camera_source" not in st.session_state:
+        st.session_state.selected_camera_source = None
+
+    if "camera_map_key_version" not in st.session_state:
+        st.session_state.camera_map_key_version = 0
+
+    if "map_dark_mode" not in st.session_state:
+        st.session_state.map_dark_mode = False
+
+    if st.session_state.selected_camera not in camera_name_set:
+        st.session_state.selected_camera = None
+
+    camera_selector_options = ["No camera"] + [camera_display_map[camera_name] for camera_name in camera_names]
+    selector_value = camera_display_map.get(st.session_state.selected_camera, "No camera")
+    if st.session_state.get("camera_selector") != selector_value:
+        st.session_state.camera_selector = selector_value
+
+    def _on_camera_selector_change():
+        selected_option = st.session_state.get("camera_selector", "No camera")
+        selected_name = None
+        if selected_option != "No camera":
+            selected_name = display_to_camera.get(selected_option, resolve_camera_name(selected_option))
+        if selected_name != st.session_state.selected_camera:
+            st.session_state.selected_camera = selected_name
+            st.session_state.selected_camera_source = "dropdown"
+            # Force a fresh map widget so persisted point selection cannot override dropdown choice.
+            st.session_state.camera_map_key_version += 1
+
+    st.selectbox(
+        "Active Camera",
+        camera_selector_options,
+        key="camera_selector",
+        on_change=_on_camera_selector_change,
     )
 
-selected_camera = st.session_state.selected_camera
+    road_reference_row = segment_df[segment_df['DateTime'] == selected_date]
+    if road_reference_row.empty:
+        road_reference_row = segment_df.head(1)
 
+    road_latitude = None
+    road_longitude = None
+    if not road_reference_row.empty:
+        road_latitude = float(road_reference_row['gps_latitude'].iloc[0])
+        road_longitude = float(road_reference_row['gps_longitude'].iloc[0])
 
-def _get_request_hostname():
-    try:
-        headers = getattr(st.context, "headers", None)
-        if headers:
-            host = headers.get("host") or headers.get("Host")
-            if host:
-                return host.split(":", 1)[0].strip("[]")
-    except Exception:
-        return None
-    return None
-
-
-def _resolve_stream_url_for_client(stream_url):
-    if not isinstance(stream_url, str) or not stream_url:
-        return ""
-
-    request_host = _get_request_hostname()
-
-    if stream_url.startswith("/"):
-        if request_host in {"localhost", "127.0.0.1", "0.0.0.0"}:
-            return f"http://{request_host}:{PROCESSED_STREAM_PORT}{stream_url}"
-        return stream_url
-
-    try:
-        parts = urlsplit(stream_url)
-    except Exception:
-        return stream_url
-
-    if parts.hostname not in {"127.0.0.1", "localhost", "0.0.0.0"}:
-        return stream_url
-
-    if not request_host:
-        return stream_url
-
-    user_info = ""
-    if parts.username:
-        user_info = parts.username
-        if parts.password:
-            user_info = f"{user_info}:{parts.password}"
-        user_info = f"{user_info}@"
-
-    port_suffix = f":{parts.port}" if parts.port else ""
-    rebuilt_netloc = f"{user_info}{request_host}{port_suffix}"
-    return urlunsplit((parts.scheme, rebuilt_netloc, parts.path, parts.query, parts.fragment))
-
-def render_processed_stream_html(stream_url, height=560):
-    safe_stream_url = escape(_resolve_stream_url_for_client(stream_url), quote=True)
-    st.markdown(
-        f"""
-        <div style="width:100%;max-width:900px;height:{height}px;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;">
-            <img
-                id="processed-feed"
-                src="{safe_stream_url}"
-                alt="Processed camera feed"
-                style="width:100%;height:100%;object-fit:contain;background:#000;"
-            />
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-@st.fragment(run_every=LIVE_STATS_REFRESH_INTERVAL)
-def render_live_camera_stats():
-    active_camera = st.session_state.selected_camera
-    if not active_camera:
-        return
-
-    _, camera_stats = get_worker_snapshot(active_camera)
-
-    selected_from_stats_nearby = render_camera_stats(camera_stats, camera_points, key_prefix="camera_stats")
-    if selected_from_stats_nearby and selected_from_stats_nearby != st.session_state.selected_camera:
-        st.session_state.selected_camera = selected_from_stats_nearby
-        st.session_state.selected_camera_source = "stats_nearby"
-        st.rerun()
-
-
-if live_update:
-    active_camera = st.session_state.selected_camera
-    if active_camera:
-        processed_stream_url = get_processed_stream_url(active_camera)
-        st.markdown(f"### 📷 Camera Feed: {active_camera}")
-        if isinstance(processed_stream_url, str) and processed_stream_url.startswith(("http://", "https://", "/")):
-            render_processed_stream_html(processed_stream_url)
-        else:
-            st.info("Worker started. Waiting for processed stream URL...")
-        render_live_camera_stats()
+    st.markdown("### Cameras Along This Road")
+    along_road = get_cameras_along_road(camera_points, selected_segment)
+    if along_road:
+        for idx, item in enumerate(along_road):
+            camera_name = item["camera"].get("location", "Unknown camera")
+            display_name = get_camera_display_name(camera_name)
+            if st.button(display_name, key=f"along_road_camera_{idx}_{camera_name}", width="stretch"):
+                st.session_state.selected_camera = camera_name
+                st.session_state.selected_camera_source = "road_list"
+                st.rerun()
     else:
-        st.info("Click a camera on the map to start a worker and view its live feed.")
-else:
-    active_camera = st.session_state.selected_camera
-    if active_camera:
-        processed_stream_url = get_processed_stream_url(active_camera)
+        st.caption("No named camera matches found for this road.")
+
+    st.markdown("### Cameras Near This Road")
+    near_road = get_cameras_near_road(camera_points, road_latitude, road_longitude)
+    if near_road:
+        for idx, item in enumerate(near_road):
+            camera_name = item["camera"]["location"]
+            label = f"{get_camera_display_name(camera_name)} ({item['direction']}, {item['miles']:.1f} mi)"
+            if st.button(label, key=f"near_road_camera_{idx}_{camera_name}", width="stretch"):
+                st.session_state.selected_camera = camera_name
+                st.session_state.selected_camera_source = "nearby_list"
+                st.rerun()
+    else:
+        st.caption("No nearby camera points found.")
+
+    toggle_col_1, toggle_col_2 = st.columns([1, 1])
+    with toggle_col_2:
+        live_update = st.checkbox(
+            "Live update selected camera",
+            value=CAMERA_LIVE_UPDATE_DEFAULT,
+            key="live_camera_updates",
+        )
+
+    selected_camera = st.session_state.selected_camera
+
+    def _get_request_hostname():
+        try:
+            headers = getattr(st.context, "headers", None)
+            if headers:
+                host = headers.get("host") or headers.get("Host")
+                if host:
+                    return host.split(":", 1)[0].strip("[]")
+        except Exception:
+            return None
+        return None
+
+    def _resolve_stream_url_for_client(stream_url):
+        if not isinstance(stream_url, str) or not stream_url:
+            return ""
+
+        request_host = _get_request_hostname()
+
+        if stream_url.startswith("/"):
+            if request_host in {"localhost", "127.0.0.1", "0.0.0.0"}:
+                return f"http://{request_host}:{PROCESSED_STREAM_PORT}{stream_url}"
+            return stream_url
+
+        try:
+            parts = urlsplit(stream_url)
+        except Exception:
+            return stream_url
+
+        if parts.hostname not in {"127.0.0.1", "localhost", "0.0.0.0"}:
+            return stream_url
+
+        if not request_host:
+            return stream_url
+
+        user_info = ""
+        if parts.username:
+            user_info = parts.username
+            if parts.password:
+                user_info = f"{user_info}:{parts.password}"
+            user_info = f"{user_info}@"
+
+        port_suffix = f":{parts.port}" if parts.port else ""
+        rebuilt_netloc = f"{user_info}{request_host}{port_suffix}"
+        return urlunsplit((parts.scheme, rebuilt_netloc, parts.path, parts.query, parts.fragment))
+
+    def render_processed_stream_html(stream_url, height=560):
+        safe_stream_url = escape(_resolve_stream_url_for_client(stream_url), quote=True)
+        st.markdown(
+            f"""
+            <div style="width:100%;max-width:900px;height:{height}px;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;">
+                <img
+                    id="processed-feed"
+                    src="{safe_stream_url}"
+                    alt="Processed camera feed"
+                    style="width:100%;height:100%;object-fit:contain;background:#000;"
+                />
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    @st.fragment(run_every=LIVE_STATS_REFRESH_INTERVAL)
+    def render_live_camera_stats():
+        active_camera = st.session_state.selected_camera
+        if not active_camera:
+            return
+
         _, camera_stats = get_worker_snapshot(active_camera)
-        st.markdown(f"### 📷 Camera Feed: {active_camera}")
-        if isinstance(processed_stream_url, str) and processed_stream_url.startswith(("http://", "https://", "/")):
-            render_processed_stream_html(processed_stream_url)
-        else:
-            st.info("Worker started. Waiting for processed stream URL...")
-        selected_from_stats_nearby = render_camera_stats(camera_stats, camera_points, key_prefix="camera_stats_static")
+
+        selected_from_stats_nearby = render_camera_stats(camera_stats, camera_points, key_prefix="camera_stats")
         if selected_from_stats_nearby and selected_from_stats_nearby != st.session_state.selected_camera:
             st.session_state.selected_camera = selected_from_stats_nearby
             st.session_state.selected_camera_source = "stats_nearby"
             st.rerun()
+
+    if live_update:
+        active_camera = st.session_state.selected_camera
+        if active_camera:
+            processed_stream_url = get_processed_stream_url(active_camera)
+            st.markdown(f"### 📷 Camera Feed: {get_camera_display_name(active_camera)}")
+            if isinstance(processed_stream_url, str) and processed_stream_url.startswith(("http://", "https://", "/")):
+                render_processed_stream_html(processed_stream_url)
+            else:
+                st.info("Worker started. Waiting for processed stream URL...")
+            render_live_camera_stats()
+        else:
+            st.info("Click a camera on the map to start a worker and view its live feed.")
     else:
-        st.info("Click a camera on the map to start a worker and view its live feed.")
+        active_camera = st.session_state.selected_camera
+        if active_camera:
+            processed_stream_url = get_processed_stream_url(active_camera)
+            _, camera_stats = get_worker_snapshot(active_camera)
+            st.markdown(f"### 📷 Camera Feed: {get_camera_display_name(active_camera)}")
+            if isinstance(processed_stream_url, str) and processed_stream_url.startswith(("http://", "https://", "/")):
+                render_processed_stream_html(processed_stream_url)
+            else:
+                st.info("Worker started. Waiting for processed stream URL...")
+            selected_from_stats_nearby = render_camera_stats(camera_stats, camera_points, key_prefix="camera_stats_static")
+            if selected_from_stats_nearby and selected_from_stats_nearby != st.session_state.selected_camera:
+                st.session_state.selected_camera = selected_from_stats_nearby
+                st.session_state.selected_camera_source = "stats_nearby"
+                st.rerun()
+        else:
+            st.info("Click a camera on the map to start a worker and view its live feed.")
 
-map_header_left, map_header_right = st.columns([8, 1])
-with map_header_left:
-    st.markdown("### Pick From Map")
-with map_header_right:
-    st.button(
-        "☾" if not st.session_state.map_dark_mode else "☼",
-        key="map_dark_mode_button",
-        help="Toggle map light/dark mode",
-        width="stretch",
-        on_click=lambda: setattr(st.session_state, "map_dark_mode", not st.session_state.map_dark_mode),
-    )
-
-if camera_points:
-    map_figure = build_camera_map_figure(
-        camera_points,
-        selected_camera=st.session_state.selected_camera,
-    )
-    with st.container(key="camera_map_shell"):
-        map_filter_css = "invert(1) hue-rotate(180deg) saturate(0.85) brightness(0.9)" if st.session_state.map_dark_mode else "none"
-        st.markdown(
-            f"""
-            <style>
-            .st-key-camera_map_shell [data-testid="stPlotlyChart"] {{
-                filter: {map_filter_css};
-                transition: filter 120ms ease-in-out;
-            }}
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-        map_selection = st.plotly_chart(
-            map_figure,
+    map_header_left, map_header_right = st.columns([8, 1])
+    with map_header_left:
+        st.markdown("### Pick From Map")
+    with map_header_right:
+        st.button(
+            "☾" if not st.session_state.map_dark_mode else "☼",
+            key="map_dark_mode_button",
+            help="Toggle map light/dark mode",
             width="stretch",
-            on_select="rerun",
-            selection_mode="points",
-            key=f"camera_map_{st.session_state.camera_map_key_version}",
+            on_click=lambda: setattr(st.session_state, "map_dark_mode", not st.session_state.map_dark_mode),
         )
-    selected_from_map = extract_selected_camera_from_map_event(map_selection)
-    if selected_from_map and selected_from_map != st.session_state.selected_camera:
-        st.session_state.selected_camera = selected_from_map
-        st.session_state.selected_camera_source = "map"
-        st.rerun()
-else:
-    st.warning("No camera map points are currently available.")
+
+    if camera_points:
+        camera_status_lookup = {point["location"]: get_camera_background_status(point["location"]) for point in camera_points}
+        map_figure = build_camera_map_figure(
+            camera_points,
+            selected_camera=st.session_state.selected_camera,
+            camera_statuses=camera_status_lookup,
+            background_scan_enabled=CAMERA_BACKGROUND_SCAN_ENABLED,
+        )
+        map_key = f"camera_map_{st.session_state.camera_map_key_version}"
+
+        def _on_camera_map_select():
+            selection_state = st.session_state.get(map_key)
+            selected_from_map = resolve_camera_name(extract_selected_camera_from_map_event(selection_state, camera_points))
+            if selected_from_map and selected_from_map != st.session_state.selected_camera:
+                st.session_state.selected_camera = selected_from_map
+                st.session_state.selected_camera_source = "map"
+
+        with st.container(key="camera_map_shell"):
+            map_filter_css = "invert(1) hue-rotate(180deg) saturate(0.85) brightness(0.9)" if st.session_state.map_dark_mode else "none"
+            st.markdown(
+                f"""
+                <style>
+                .st-key-camera_map_shell [data-testid="stPlotlyChart"] {{
+                    filter: {map_filter_css};
+                    transition: filter 120ms ease-in-out;
+                }}
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            map_selection = st.plotly_chart(
+                map_figure,
+                width="stretch",
+                on_select=_on_camera_map_select,
+                selection_mode="points",
+                key=map_key,
+            )
+    else:
+        st.warning("No camera map points are currently available.")
+
+    if CAMERA_BACKGROUND_SCAN_ENABLED:
+        with st.expander("Debug: Background Camera Sampler", expanded=False):
+            st.caption("Development-only visibility into background camera sampling state.")
+            st.write(f"Enabled: {CAMERA_BACKGROUND_SCAN_ENABLED}")
+            st.write(f"Sample seconds per camera: {CAMERA_BACKGROUND_SAMPLE_SECONDS}")
+            st.write(f"Queue dwell seconds: {CAMERA_BACKGROUND_DWELL_SECONDS}")
+            st.write(f"Configured workers: {CAMERA_BACKGROUND_WORKERS}")
+
+            debug_rows = []
+            for camera_name in camera_names:
+                status = get_camera_background_status(camera_name)
+                movement_counts = status.get("movement_counts", {}) or {}
+                debug_rows.append(
+                    {
+                        "Camera": camera_name,
+                        "Display": get_camera_display_name(camera_name),
+                        "Badge": status.get("badge", ""),
+                        "Traffic": status.get("traffic_label", "No Feed"),
+                        "Ended Score": status.get("traffic_score"),
+                        "Stopped": int(movement_counts.get("stopped", 0) or 0),
+                        "Slow": int(movement_counts.get("slow", 0) or 0),
+                        "Fast": int(movement_counts.get("fast", 0) or 0),
+                        "Vehicles": int(status.get("vehicle_count", 0) or 0),
+                        "Last Sampled": status.get("last_sampled", ""),
+                    }
+                )
+
+            if debug_rows:
+                st.dataframe(pd.DataFrame(debug_rows), width="stretch", hide_index=True)
+            else:
+                st.caption("No camera status data yet.")
+
+
+render_camera_background_ui()

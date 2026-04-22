@@ -1,5 +1,6 @@
 import math
 import re
+from collections.abc import Mapping
 
 import plotly.graph_objects as go
 
@@ -120,64 +121,193 @@ def get_cameras_near_road(camera_points, road_latitude, road_longitude, limit=8)
     return near[:limit]
 
 
-def build_camera_map_figure(camera_points, selected_camera=None):
+def _map_color_from_status(status, background_scan_enabled):
+    if not background_scan_enabled:
+        return "#22c55e"
+
+    if not status:
+        return "#000000"
+
+    badge = status.get("badge")
+    if badge == "🟢":
+        return "#22c55e"
+    if badge == "🟡":
+        return "#eab308"
+    if badge == "🟠":
+        return "#f97316"
+    if badge == "🔴":
+        return "#ef4444"
+    return "#000000"
+
+
+def build_camera_map_figure(camera_points, selected_camera=None, camera_statuses=None, background_scan_enabled=True):
     if not camera_points:
         return go.Figure()
 
-    lats = []
-    lons = []
-    names = []
-    colors = []
-    sizes = []
+    camera_statuses = camera_statuses or {}
+
+    base_lats = []
+    base_lons = []
+    base_names = []
+    base_colors = []
+    base_ids = []
+
+    selected_lats = []
+    selected_lons = []
+    selected_names = []
+    selected_colors = []
+    selected_ids = []
 
     for point in camera_points:
-        lats.append(point["y"])
-        lons.append(point["x"])
-        names.append(point["location"])
         is_selected = point["location"] == selected_camera
-        colors.append("#ef4444" if is_selected else "#22c55e")
-        sizes.append(17 if is_selected else 10)
+        color = _map_color_from_status(camera_statuses.get(point["location"]), background_scan_enabled)
+        if is_selected:
+            selected_lats.append(point["y"])
+            selected_lons.append(point["x"])
+            selected_names.append(point["location"])
+            selected_colors.append("#a855f7")
+            selected_ids.append(point["location"])
+        else:
+            base_lats.append(point["y"])
+            base_lons.append(point["x"])
+            base_names.append(point["location"])
+            base_colors.append(color)
+            base_ids.append(point["location"])
 
-    fig = go.Figure(
-        go.Scattermap(
-            lat=lats,
-            lon=lons,
-            mode="markers",
-            marker={"size": sizes, "color": colors, "opacity": 0.95},
-            text=names,
-            customdata=names,
-            hovertemplate="%{text}<extra></extra>",
+    fig = go.Figure()
+
+    if base_lats:
+        fig.add_trace(
+            go.Scattermapbox(
+                lat=base_lats,
+                lon=base_lons,
+                mode="markers",
+                marker={"size": 10, "color": base_colors, "opacity": 0.95},
+                text=base_names,
+                customdata=base_names,
+                ids=base_ids,
+                showlegend=False,
+                hovertemplate="%{text}<extra></extra>",
+                hoverinfo="skip",
+            )
         )
-    )
+
+    if selected_lats:
+        fig.add_trace(
+            go.Scattermapbox(
+                lat=selected_lats,
+                lon=selected_lons,
+                mode="markers",
+                marker={"size": 22, "color": selected_colors, "opacity": 1.0},
+                text=selected_names,
+                customdata=selected_names,
+                ids=selected_ids,
+                showlegend=False,
+                hovertemplate="%{text}<extra></extra>",
+                hoverinfo="skip",
+            )
+        )
 
     fig.update_layout(
-        map={
+        mapbox={
             "style": "open-street-map",
             "center": {"lat": 38.5733, "lon": -92.6041},
             "zoom": 7,
         },
         margin={"l": 0, "r": 0, "t": 0, "b": 0},
         clickmode="event+select",
+        showlegend=False,
         height=460,
         uirevision="camera-map-fixed-ui",
     )
     return fig
 
 
-def extract_selected_camera_from_map_event(selection):
+def _get_event_value(obj, key, default=None):
+    if isinstance(obj, Mapping):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _extract_points_from_selection(selection):
     if not selection:
-        return None
+        return []
 
-    selected_points = selection.get("selection", {}).get("points", [])
-    if not selected_points:
-        return None
+    if isinstance(selection, Mapping):
+        nested_selection = selection.get("selection")
+        if isinstance(nested_selection, Mapping):
+            points = nested_selection.get("points")
+            if points:
+                return points
 
-    selected_point = selected_points[0]
-    custom_data = selected_point.get("customdata")
+        points = selection.get("points")
+        if points:
+            return points
+
+        if isinstance(nested_selection, list):
+            return nested_selection
+
+        return []
+
+    nested_selection = getattr(selection, "selection", None)
+    if nested_selection is not None:
+        points = getattr(nested_selection, "points", None)
+        if points:
+            return points
+
+    points = getattr(selection, "points", None)
+    if points:
+        return points
+
+    return []
+
+
+def _resolve_camera_from_point_point(selected_point, camera_points=None):
+    custom_data = _get_event_value(selected_point, "customdata")
     if isinstance(custom_data, str):
         return custom_data
 
     if isinstance(custom_data, (list, tuple)) and custom_data:
         return str(custom_data[0])
 
-    return None
+    text_value = _get_event_value(selected_point, "text")
+    if isinstance(text_value, str) and text_value:
+        return text_value
+
+    if not camera_points:
+        return None
+
+    lat = _get_event_value(selected_point, "lat")
+    lon = _get_event_value(selected_point, "lon")
+    if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+        return None
+
+    closest_camera = None
+    closest_distance = None
+    for camera in camera_points:
+        camera_lat = camera.get("y")
+        camera_lon = camera.get("x")
+        if not isinstance(camera_lat, (int, float)) or not isinstance(camera_lon, (int, float)):
+            continue
+
+        distance = (camera_lat - lat) ** 2 + (camera_lon - lon) ** 2
+        if closest_distance is None or distance < closest_distance:
+            closest_distance = distance
+            closest_camera = camera.get("location")
+
+    return closest_camera
+
+
+def extract_selected_camera_from_map_event(selection, camera_points=None):
+    selected_points = _extract_points_from_selection(selection)
+
+    if not selected_points:
+        return None
+
+    for selected_point in selected_points:
+        selected_camera = _resolve_camera_from_point_point(selected_point, camera_points)
+        if selected_camera:
+            return selected_camera
+
+    selected_point = selected_points[0]
+    return _resolve_camera_from_point_point(selected_point, camera_points)

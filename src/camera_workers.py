@@ -37,7 +37,10 @@ from config import (
     ROAD_MASK_MIN_VALUE,
     ROAD_MASK_STALE_SECONDS,
     ROAD_MASK_WARMUP_SECONDS,
+    STREAM_HISTORY_MAX_FRAMES,
     STREAM_JPEG_QUALITY,
+    STREAM_OUTPUT_FPS,
+    STREAM_PLAYBACK_DELAY_SECONDS,
     TRAFFIC_BASELINE_COVERAGE,
     TRAFFIC_HEAVY_MAX,
     TRAFFIC_LIGHT_MAX,
@@ -767,6 +770,7 @@ class CameraWorker:
         self.lock = Lock()
         self.latest_frame = None
         self.latest_frame_id = 0
+        self.frame_history = deque(maxlen=STREAM_HISTORY_MAX_FRAMES)
         self.latest_stats = get_empty_stats(camera_name)
         self.active_viewers = 0
         self.last_accessed = time.monotonic()
@@ -839,6 +843,7 @@ class CameraWorker:
                     with self.lock:
                         self.latest_frame = buffer.tobytes()
                         self.latest_frame_id += 1
+                        self.frame_history.append((self.latest_frame_id, time.monotonic(), self.latest_frame))
                         self.latest_stats = get_empty_stats(self.camera_name)
                         self.latest_stats["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
                 time.sleep(0.5)
@@ -1051,6 +1056,7 @@ class CameraWorker:
             with self.lock:
                 self.latest_frame = buffer.tobytes()
                 self.latest_frame_id += 1
+                self.frame_history.append((self.latest_frame_id, frame_time, self.latest_frame))
                 self.latest_stats = stats_snapshot
 
         if cam is not None:
@@ -1132,13 +1138,36 @@ def _build_processed_stream_handler():
                 self.end_headers()
 
                 last_frame_id = -1
+                frame_interval = 1.0 / float(STREAM_OUTPUT_FPS)
+                next_emit_at = time.monotonic()
                 while True:
+                    now = time.monotonic()
+                    if now < next_emit_at:
+                        time.sleep(min(next_emit_at - now, 0.05))
+                        continue
+
+                    next_emit_at = now + frame_interval
+                    target_time = now - STREAM_PLAYBACK_DELAY_SECONDS
+
                     with worker.lock:
-                        frame_bytes = worker.latest_frame
-                        frame_id = worker.latest_frame_id
+                        history = list(worker.frame_history)
+
+                    if not history:
+                        time.sleep(0.01)
+                        continue
+
+                    chosen = None
+                    for frame_id, frame_ts, frame_bytes in reversed(history):
+                        if frame_ts <= target_time:
+                            chosen = (frame_id, frame_bytes)
+                            break
+
+                    if chosen is None:
+                        frame_id, _, frame_bytes = history[0]
+                    else:
+                        frame_id, frame_bytes = chosen
 
                     if not frame_bytes or frame_id == last_frame_id:
-                        time.sleep(0.01)
                         continue
 
                     last_frame_id = frame_id

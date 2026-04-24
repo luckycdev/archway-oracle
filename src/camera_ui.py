@@ -46,7 +46,7 @@ def render_camera_stats(stats, camera_points, key_prefix="stats"):
                     st.write(f"{count} {noun}")
 
     selected_camera = stats.get("selected_camera")
-    nearby = get_nearby_cameras(camera_points, selected_camera)
+    nearby = get_nearby_cameras(camera_points, selected_camera, limit=5)
     selected_from_nearby = None
     with st.container(border=True):
         st.markdown("**Nearby Cameras (to selected camera)**")

@@ -340,7 +340,7 @@ def render_camera_background_ui():
         st.caption("No named camera matches found for this road.")
 
     st.markdown("### Cameras Near This Road")
-    near_road = get_cameras_near_road(camera_points, road_latitude, road_longitude)
+    near_road = get_cameras_near_road(camera_points, road_latitude, road_longitude, limit=5)
     if near_road:
         for idx, item in enumerate(near_road):
             camera_name = item["camera"]["location"]

@@ -7,7 +7,13 @@ from html import escape
 from urllib.parse import urlsplit, urlunsplit
 
 # Import from our local src modules
-from data_processing import load_and_prep_data, classify_traffic
+from data_processing import (
+    MONTHLY_FACTORS,
+    calculate_aadt_estimate,
+    calculate_daily_traffic,
+    load_and_prep_data,
+    classify_traffic,
+)
 from model import train_and_evaluate
 from visualizations import build_traffic_chart, build_feature_importance_chart # Added this
 from engine import get_best_time_to_leave
@@ -186,6 +192,36 @@ if not current_row.empty:
         m4.metric("Visibility", "⚠️ High Glare", delta="Use Caution", delta_color="inverse")
     else:
         m4.metric("Visibility", "Good", delta="Normal")
+
+    st.markdown("---")
+    st.subheader("📊 Annual Average Daily Traffic")
+
+    daily_vol = calculate_daily_traffic(full_data, selected_segment, selected_day)
+    aadt_val = calculate_aadt_estimate(daily_vol, selected_day)
+    current_factor = MONTHLY_FACTORS.get(selected_day.month, 1.0)
+
+    col_stats1, col_stats2, col_stats3 = st.columns(3)
+
+    with col_stats1:
+        st.metric("Daily Volume", f"{daily_vol:,} cars")
+        st.caption(f"Total for {selected_day.strftime('%b %d')}")
+
+    with col_stats2:
+        st.metric("Est. AADT", f"{aadt_val:,} cars")
+        st.caption("Normalized Annual Average")
+
+    with col_stats3:
+        if aadt_val > 0:
+            index = daily_vol / aadt_val
+            status = "Above Avg" if index > 1.1 else "Below Avg" if index < 0.9 else "Normal"
+            st.metric(
+                label="Seasonal Load",
+                value=f"{current_factor}x",
+                delta=f"{status} ({index:.2f}x)",
+                delta_color="inverse",
+            )
+        else:
+            st.metric("Seasonal Load", "N/A")
 
 # Best time to leave recommendation
 recommendation = get_best_time_to_leave(future_data, wait_penalty_per_hour=patience)

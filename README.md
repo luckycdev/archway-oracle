@@ -6,13 +6,8 @@ This project is a merge and improvement of [Eagle Eye Traffic Detector](https://
 ## Roadmap / to-do list
 - Draw roads on map
 - Make sure all previous archway features work
-- Make sure ui buttons are in correct order for camera stuff
-- Maybe remove AI Performance section
-- Check why map dark/light mode isnt instant change
 - Maybe limit the amount of nearby cams
-- Use .env and Docker
 - limit cams to stl
-- use aadt thing
 
 
 - note: may have to install fmmpeg and torch

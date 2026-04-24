@@ -31,6 +31,33 @@ from config import (
     WEATHER_FALLBACK_TEMPERATURE,
 )
 
+# Monthly Expansion Factors (Standard Traffic Engineering Estimates)
+MONTHLY_FACTORS = {
+    1: 0.90, 2: 0.92, 3: 0.98, 4: 1.02, 5: 1.05, 6: 1.10,
+    7: 1.12, 8: 1.10, 9: 1.03, 10: 1.01, 11: 0.95, 12: 0.93,
+}
+
+
+def calculate_daily_traffic(df, segment_id, target_date):
+    """Sums vehicle count for 24 hours of selected day."""
+    if hasattr(target_date, "date"):
+        target_date_only = target_date.date()
+    else:
+        target_date_only = target_date
+
+    day_data = df[
+        (df["road_segment_id"] == segment_id)
+        & (df["DateTime"].dt.date == target_date_only)
+    ]
+    return int(day_data["vehicle_count"].sum())
+
+
+def calculate_aadt_estimate(daily_total, target_date):
+    """Estimates Annual Average Daily Traffic from daily volume."""
+    month = target_date.month
+    factor = MONTHLY_FACTORS.get(month, 1.0)
+    return int(daily_total / factor)
+
 def classify_traffic(volume):
     if volume > 2000: return "🔴 Red (Heavy)"
     elif volume > 1000: return "🟡 Yellow (Moderate)"

@@ -51,6 +51,7 @@ from config import (
     YOLO_CONFIDENCE,
     YOLO_DEVICE,
     YOLO_DETECTION_INTERVAL_FRAMES,
+    YOLO_DETECTION_MIN_INTERVAL_SECONDS,
     YOLO_MODEL,
     YOLO_MAX_VRAM_GB,
     YOLO_PROCESS_MAX_WIDTH,
@@ -804,6 +805,7 @@ class CameraWorker:
         previous_positions = []
         generator_start_time = time.monotonic()
         frame_index = 0
+        last_detection_time = 0.0
         cached_detections = []
         latest_movement_counts = {"stopped": 0, "slow": 0, "fast": 0}
         model = get_yolo_model()
@@ -872,8 +874,12 @@ class CameraWorker:
                     smoothed_fps = smoothed_fps * (1.0 - FPS_SMOOTHING_ALPHA) + instant_fps * FPS_SMOOTHING_ALPHA
             previous_frame_time = frame_time
 
-            run_detection_this_frame = (frame_index % YOLO_DETECTION_INTERVAL_FRAMES) == 1
+            run_detection_this_frame = (
+                (frame_index % YOLO_DETECTION_INTERVAL_FRAMES) == 1
+                and (frame_time - last_detection_time) >= YOLO_DETECTION_MIN_INTERVAL_SECONDS
+            )
             if run_detection_this_frame:
+                last_detection_time = frame_time
                 scale_x = 1.0
                 scale_y = 1.0
                 inference_frame = frame
@@ -1120,6 +1126,8 @@ def _build_processed_stream_handler():
                 self.send_header("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0")
                 self.send_header("Pragma", "no-cache")
                 self.send_header("Connection", "close")
+                self.send_header("X-Accel-Buffering", "no")
+                self.send_header("X-Content-Type-Options", "nosniff")
                 self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
                 self.end_headers()
 

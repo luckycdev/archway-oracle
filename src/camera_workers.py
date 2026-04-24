@@ -474,8 +474,26 @@ def _sample_camera_traffic(camera_name, sample_seconds=CAMERA_BACKGROUND_SAMPLE_
     return _badge_from_traffic_label(traffic_label), traffic_label, traffic_score, stats
 
 
+def _has_active_live_viewers():
+    with workers_lock:
+        workers = list(camera_workers.values())
+
+    for worker in workers:
+        if worker is None:
+            continue
+        with worker.lock:
+            if worker.active_viewers > 0:
+                return True
+
+    return False
+
+
 def _background_sampler_loop():
     while not background_stop_event.is_set():
+        if _has_active_live_viewers():
+            time.sleep(max(CAMERA_BACKGROUND_DWELL_SECONDS, 0.25))
+            continue
+
         camera_name = None
 
         with background_queue_lock:
@@ -798,8 +816,12 @@ class CameraWorker:
 
     def run(self):
         cam = open_video_capture(self.camera_source)
+        source_fps_cap = 60.0
         if cam is not None and cam.isOpened():
             cam.set(cv2.CAP_PROP_BUFFERSIZE, CAMERA_BUFFER_SIZE)
+            raw_source_fps = float(cam.get(cv2.CAP_PROP_FPS) or 0.0)
+            if 1.0 <= raw_source_fps <= 120.0:
+                source_fps_cap = raw_source_fps
         road_mask = None
         road_mask_last_seen = None
         smoothed_coverage = 0
@@ -850,6 +872,9 @@ class CameraWorker:
                 cam = open_video_capture(self.camera_source)
                 if cam is not None and cam.isOpened():
                     cam.set(cv2.CAP_PROP_BUFFERSIZE, CAMERA_BUFFER_SIZE)
+                    raw_source_fps = float(cam.get(cv2.CAP_PROP_FPS) or 0.0)
+                    if 1.0 <= raw_source_fps <= 120.0:
+                        source_fps_cap = raw_source_fps
                 road_mask = None
                 road_mask_last_seen = None
                 smoothed_coverage = 0
@@ -1033,13 +1058,15 @@ class CameraWorker:
             if not ok:
                 continue
 
+            displayed_fps = min(smoothed_fps, source_fps_cap)
+
             stats_snapshot = {
                 "vehicle_count": vehicle_count,
                 "coverage": round(coverage, 2),
                 "raw_coverage": round(raw_coverage, 2),
                 "traffic_score": round(traffic_score, 2),
                 "traffic_label": traffic_label,
-                "fps": round(smoothed_fps, 2),
+                "fps": round(displayed_fps, 2),
                 "resolution": f"{frame_width}x{frame_height}",
                 "road_mask_percent": round(road_mask_percent, 2),
                 "boxes_area": int(boxes_area),
@@ -1137,7 +1164,6 @@ def _build_processed_stream_handler():
                 self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
                 self.end_headers()
 
-                last_frame_id = -1
                 frame_interval = 1.0 / float(STREAM_OUTPUT_FPS)
                 next_emit_at = time.monotonic()
                 while True:
@@ -1167,10 +1193,9 @@ def _build_processed_stream_handler():
                     else:
                         frame_id, frame_bytes = chosen
 
-                    if not frame_bytes or frame_id == last_frame_id:
+                    if not frame_bytes:
                         continue
 
-                    last_frame_id = frame_id
                     worker.touch()
                     try:
                         self.wfile.write(b"--frame\r\n")

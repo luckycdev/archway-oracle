@@ -574,7 +574,7 @@ def to_jsonable(value):
         return float(value)
     return value
 
-def traffic_and_weather_rating(class_counts, coverage, predicted_vehicles, weather):
+def traffic_and_weather_rating(class_counts, coverage, movement_counts, predicted_vehicles, weather):
     """Calculates traffic score factoring in data from vision and predictive models
     that ranges from 0-10"""
     baseline_coverage = TRAFFIC_BASELINE_COVERAGE
@@ -590,6 +590,23 @@ def traffic_and_weather_rating(class_counts, coverage, predicted_vehicles, weath
     weighted_count = (car_count * 1.0) + (motorcycle_count * 0.5) + (bus_count * 2.5) + (truck_count * 3.0)
     weight_factor = weighted_count / max(total_count, 1.0)
     num_traffic_score = (adjusted_coverage / adjusted_max) * weight_factor
+
+    tracked_total = 0
+    stopped_ratio = 0.0
+    if movement_counts:
+        tracked_total = (
+            int(movement_counts.get("stopped", 0))
+            + int(movement_counts.get("slow", 0))
+            + int(movement_counts.get("fast", 0))
+        )
+        if tracked_total > 0:
+            stopped_ratio = float(movement_counts.get("stopped", 0)) / float(tracked_total)
+
+    # Give less congestion penalty when tracked vehicles are mostly stopped (e.g. red lights/queues).
+    stopped_relief_factor = 1.0 - (0.35 * stopped_ratio)
+    stopped_relief_factor = max(0.65, min(stopped_relief_factor, 1.0))
+    num_traffic_score *= stopped_relief_factor
+
     num_traffic_score_0_to_10 = min(num_traffic_score * 10, 10)
 
     w_penalty = weather_penalty(weather)
@@ -944,6 +961,7 @@ class CameraWorker:
                 road_mask_last_seen[road_mask == 0] = 0.0
 
             boxes_area = 0
+            vehicle_mask = np.zeros((frame_height, frame_width), dtype=np.uint8)
             vehicle_count = 0
             class_counts = {}
             current_positions = []
@@ -985,6 +1003,7 @@ class CameraWorker:
                 )
 
                 boxes_area += (x2 - x1) * (y2 - y1)
+                vehicle_mask[y1:y2, x1:x2] = 1
                 road_mask[y1:y2, x1:x2] = np.maximum(road_mask[y1:y2, x1:x2], 200)
                 road_mask_last_seen[y1:y2, x1:x2] = now
 
@@ -1003,13 +1022,21 @@ class CameraWorker:
             coverage_warmup_done = first_mask_seen_time is not None and (now - first_mask_seen_time) >= ROAD_MASK_WARMUP_SECONDS
             road_mask_percent = (road_area / frame_area) * 100 if frame_area > 0 else 0
             road_learning_ready = road_area > frame_area * ROAD_LEARNING_MIN_FRAME_RATIO
-            raw_coverage = (boxes_area / road_area) * 100 if road_area > 0 and coverage_warmup_done else 0
+            occupied_road_pixels = int(np.count_nonzero((vehicle_mask > 0) & (road_mask > 0)))
+            raw_coverage = (occupied_road_pixels / road_area) * 100 if road_area > 0 and coverage_warmup_done else 0
+            raw_coverage = min(max(raw_coverage, 0.0), 100.0)
             effective_coverage = raw_coverage if road_learning_ready else 0
             smoothed_coverage = smoothed_coverage * (1.0 - COVERAGE_SMOOTHING_ALPHA) + effective_coverage * COVERAGE_SMOOTHING_ALPHA
-            coverage = smoothed_coverage
+            coverage = min(max(smoothed_coverage, 0.0), 100.0)
 
             predicted_vehicles, weather = get_prediction_context(self.camera_name)
-            traffic_score, traffic_label = traffic_and_weather_rating(class_counts, coverage, predicted_vehicles, weather)
+            traffic_score, traffic_label = traffic_and_weather_rating(
+                class_counts,
+                coverage,
+                movement_counts,
+                predicted_vehicles,
+                weather,
+            )
 
             mask_colored = cv2.cvtColor(road_mask, cv2.COLOR_GRAY2BGR)
             frame = cv2.addWeighted(frame, 1.0, mask_colored, 0.4, 0)

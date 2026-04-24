@@ -6,8 +6,7 @@ This project is a merge and improvement of [Eagle Eye Traffic Detector](https://
 ## Roadmap / to-do list
 - Draw roads on map
 - Make sure all previous archway features work
-- Maybe limit the amount of nearby cams
-- limit cams to stl
+- Investigate feed lag
 
 
 - note: may have to install fmmpeg and torch

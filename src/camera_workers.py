@@ -22,8 +22,6 @@ from config import (
     CAMERA_CAPTURE_RETRY_BACKOFF_SECONDS,
     CAMERA_SUPPRESS_OPENCV_LOGS,
     COVERAGE_SMOOTHING_ALPHA,
-    DEFAULT_CAMERA_NAME,
-    DEFAULT_STREAM_SOURCE,
     FPS_SMOOTHING_ALPHA,
     MIN_BOX_BOTTOM_Y_RATIO,
     MOVEMENT_MAX_MATCH_DISTANCE_PIXELS,
@@ -44,7 +42,6 @@ from config import (
     TRAFFIC_HEAVY_MAX,
     TRAFFIC_LIGHT_MAX,
     TRAFFIC_MODERATE_MAX,
-    VIDEO_SOURCE,
     VISION_WEIGHT,
     WEATHER_PENALTY_GLARE,
     WEATHER_PENALTY_RAIN,
@@ -333,25 +330,19 @@ def load_camera_sources():
     except Exception as exc:
         LOGGER.warning("Failed to load camera list: %s", exc)
 
-    if DEFAULT_CAMERA_NAME not in camera_map:
-        camera_map[DEFAULT_CAMERA_NAME] = normalize_video_source(DEFAULT_STREAM_SOURCE)
-
     return camera_map
 
 
 camera_sources = load_camera_sources()
-default_source = normalize_video_source(VIDEO_SOURCE)
 
 
 def reload_camera_sources():
-    global camera_sources, default_camera_name
+    global camera_sources
 
     refreshed_sources = load_camera_sources()
 
     camera_sources.clear()
     camera_sources.update(refreshed_sources)
-
-    default_camera_name = resolve_default_camera_name()
 
     with background_queue_lock:
         background_queue.clear()
@@ -455,6 +446,9 @@ def get_camera_display_name(camera_name):
 
 def _sample_camera_traffic(camera_name, sample_seconds=CAMERA_BACKGROUND_SAMPLE_SECONDS):
     worker = get_or_create_worker(camera_name)
+    if worker is None:
+        return STATUS_BADGE_NO_FEED, "No Feed", None, None
+
     started = time.monotonic()
 
     while time.monotonic() - started < sample_seconds:
@@ -540,23 +534,6 @@ def ensure_background_camera_sampler():
             background_threads.append(thread)
 
     return True
-
-
-def resolve_default_camera_name():
-    if DEFAULT_CAMERA_NAME in camera_sources:
-        return DEFAULT_CAMERA_NAME
-
-    for camera_name, camera_source in camera_sources.items():
-        if camera_source == default_source:
-            return camera_name
-
-    if camera_sources:
-        return next(iter(camera_sources))
-
-    return DEFAULT_CAMERA_NAME
-
-
-default_camera_name = resolve_default_camera_name()
 
 
 def to_jsonable(value):
@@ -1081,7 +1058,7 @@ class CameraWorker:
 def get_or_create_worker(camera_name):
     camera_name = resolve_camera_name(camera_name)
     if camera_name not in camera_sources:
-        camera_name = default_camera_name
+        return None
 
     with workers_lock:
         worker = camera_workers.get(camera_name)
@@ -1096,6 +1073,10 @@ def get_or_create_worker(camera_name):
 def get_worker_snapshot(camera_name):
     camera_name = resolve_camera_name(camera_name)
     worker = get_or_create_worker(camera_name)
+    if worker is None:
+        safe_camera_name = camera_name if isinstance(camera_name, str) and camera_name else "No camera"
+        return None, to_jsonable(get_empty_stats(safe_camera_name))
+
     worker.touch()
     with worker.lock:
         frame_bytes = worker.latest_frame
@@ -1128,6 +1109,10 @@ def _build_processed_stream_handler():
                 return
 
             worker = get_or_create_worker(camera_name)
+            if worker is None:
+                self.send_error(404, "Camera not found")
+                return
+
             worker.add_viewer()
             try:
                 self.send_response(200)
@@ -1197,7 +1182,7 @@ def get_processed_stream_url(camera_name):
         return ""
 
     if camera_name not in camera_sources:
-        camera_name = default_camera_name
+        return ""
 
     if not ensure_processed_stream_server():
         return ""

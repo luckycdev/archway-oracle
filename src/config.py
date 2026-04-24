@@ -127,14 +127,20 @@ CAMERAS_JSON_URL = _get_str(
     "https://traveler.modot.org/timconfig/feed/desktop/StreamingCams2.json",
 )
 CAMERAS_JSON_TIMEOUT_SECONDS = _get_float("CAMERAS_JSON_TIMEOUT_SECONDS", 15.0)
+CAMERA_TRIANGLE_FILTER_ENABLED = _get_bool("CAMERA_TRIANGLE_FILTER_ENABLED", True)
+
+# Triangle vertices (lat, lon) to keep cameras around St. Louis metro only.
+CAMERA_TRIANGLE_A_LAT = _get_float("CAMERA_TRIANGLE_A_LAT", 39.10)
+CAMERA_TRIANGLE_A_LON = _get_float("CAMERA_TRIANGLE_A_LON", -90.95)
+CAMERA_TRIANGLE_B_LAT = _get_float("CAMERA_TRIANGLE_B_LAT", 38.05)
+CAMERA_TRIANGLE_B_LON = _get_float("CAMERA_TRIANGLE_B_LON", -91.35)
+CAMERA_TRIANGLE_C_LAT = _get_float("CAMERA_TRIANGLE_C_LAT", 38.00)
+CAMERA_TRIANGLE_C_LON = _get_float("CAMERA_TRIANGLE_C_LON", -89.75)
 
 # Camera worker / CV pipeline
 SYMPY_GROUND_TYPES = _get_str("SYMPY_GROUND_TYPES", "python")
 os.environ.setdefault("SYMPY_GROUND_TYPES", SYMPY_GROUND_TYPES)
 
-DEFAULT_STREAM_SOURCE = _get_str("DEFAULT_STREAM_SOURCE", "0")
-VIDEO_SOURCE = _get_str("VIDEO_SOURCE", DEFAULT_STREAM_SOURCE)
-DEFAULT_CAMERA_NAME = _get_str("DEFAULT_CAMERA_NAME", "Default Camera")
 YOLO_MODEL = _get_str("YOLO_MODEL", "yolo26n.pt")
 YOLO_DEVICE = _get_str("YOLO_DEVICE", "0")
 YOLO_MAX_VRAM_GB = _get_float("YOLO_MAX_VRAM_GB", 5.5)

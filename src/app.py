@@ -352,6 +352,7 @@ def render_camera_background_ui():
     else:
         st.caption("No nearby camera points found.")
 
+
     def _get_request_hostname():
         try:
             headers = getattr(st.context, "headers", None)

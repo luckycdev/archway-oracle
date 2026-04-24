@@ -11,5 +11,8 @@ This project is a merge and improvement of [Eagle Eye Traffic Detector](https://
 - Check why map dark/light mode isnt instant change
 - Maybe limit the amount of nearby cams
 - Use .env and Docker
+- limit cams to stl
+- use aadt thing
+
 
 - note: may have to install fmmpeg and torch

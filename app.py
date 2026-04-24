@@ -293,10 +293,6 @@ if near_road:
 else:
     st.caption("No nearby camera points found.")
 
-toggle_col_1, toggle_col_2 = st.columns([1, 1])
-with toggle_col_2:
-    live_update = st.checkbox("Live update selected camera", value=True, key="live_camera_updates")
-
 prefer_native_html_stream = st.checkbox(
     "Use native HTML processed stream rendering (beta)",
     value=True,
@@ -386,48 +382,32 @@ def render_live_camera_stats():
         st.rerun()
 
 
-if live_update:
-    active_camera = st.session_state.selected_camera
-    if active_camera:
-        processed_stream_url = get_processed_stream_url(active_camera)
+active_camera = st.session_state.selected_camera
+if active_camera:
+    processed_stream_url = get_processed_stream_url(active_camera)
 
-        st.markdown(f"### 📷 Camera Feed: {active_camera}")
-        if prefer_native_html_stream and isinstance(processed_stream_url, str) and processed_stream_url.startswith(("http://", "https://")):
-            render_embedded_camera_stream(processed_stream_url, use_image_tag=True)
-        else:
-            with st.container(key="live_camera_frame"):
-                st.markdown(
-                    """
-                    <style>
-                    .st-key-live_camera_frame [data-testid="stImage"],
-                    .st-key-live_camera_frame [data-testid="stImage"] img {
-                        animation: none !important;
-                        transition: none !important;
-                        opacity: 1 !important;
-                    }
-                    </style>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                render_live_camera_frame()
-        render_live_camera_stats()
+    st.markdown(f"### 📷 Camera Feed: {active_camera}")
+    if prefer_native_html_stream and isinstance(processed_stream_url, str) and processed_stream_url.startswith(("http://", "https://")):
+        render_embedded_camera_stream(processed_stream_url, use_image_tag=True)
     else:
-        st.info("Click a camera on the map to start a worker and view its live feed.")
+        with st.container(key="live_camera_frame"):
+            st.markdown(
+                """
+                <style>
+                .st-key-live_camera_frame [data-testid="stImage"],
+                .st-key-live_camera_frame [data-testid="stImage"] img {
+                    animation: none !important;
+                    transition: none !important;
+                    opacity: 1 !important;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            render_live_camera_frame()
+    render_live_camera_stats()
 else:
-    active_camera = st.session_state.selected_camera
-    if active_camera:
-        frame_bytes, camera_stats = get_worker_snapshot(active_camera)
-        st.markdown(f"### 📷 Camera Feed: {active_camera}")
-        if frame_bytes:
-            st.image(frame_bytes, channels="BGR", width=900)
-        else:
-            st.info("Worker started. Waiting for camera frames...")
-        selected_from_stats_nearby = render_camera_stats(camera_stats, camera_points, key_prefix="camera_stats_static")
-        if selected_from_stats_nearby and selected_from_stats_nearby != st.session_state.selected_camera:
-            st.session_state.selected_camera = selected_from_stats_nearby
-            st.rerun()
-    else:
-        st.info("Click a camera on the map to start a worker and view its live feed.")
+    st.info("Click a camera on the map to start a worker and view its live feed.")
 
 map_header_left, map_header_right = st.columns([8, 1])
 with map_header_left:
@@ -464,11 +444,11 @@ if camera_points:
             width="stretch",
             on_select="rerun",
             selection_mode="points",
+            config={"scrollZoom": True, "doubleClick": False, "doubleClickDelay": 1000},
             key="camera_map",
         )
     selected_from_map = extract_selected_camera_from_map_event(map_selection)
     if selected_from_map and selected_from_map != st.session_state.selected_camera:
         st.session_state.selected_camera = selected_from_map
-        st.rerun()
 else:
     st.warning("No camera map points are currently available.")

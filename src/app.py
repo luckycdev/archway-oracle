@@ -39,7 +39,6 @@ from config import (
     CAMERA_BACKGROUND_SAMPLE_SECONDS,
     CAMERA_BACKGROUND_SCAN_ENABLED,
     CAMERA_BACKGROUND_WORKERS,
-    CAMERA_LIVE_UPDATE_DEFAULT,
     LIVE_STATS_REFRESH_INTERVAL,
     PATIENCE_DEFAULT,
     PATIENCE_MAX,
@@ -317,16 +316,6 @@ def render_camera_background_ui():
     else:
         st.caption("No nearby camera points found.")
 
-    toggle_col_1, toggle_col_2 = st.columns([1, 1])
-    with toggle_col_2:
-        live_update = st.checkbox(
-            "Live update selected camera",
-            value=CAMERA_LIVE_UPDATE_DEFAULT,
-            key="live_camera_updates",
-        )
-
-    selected_camera = st.session_state.selected_camera
-
     def _get_request_hostname():
         try:
             headers = getattr(st.context, "headers", None)
@@ -401,35 +390,17 @@ def render_camera_background_ui():
             st.session_state.selected_camera_source = "stats_nearby"
             st.rerun()
 
-    if live_update:
-        active_camera = st.session_state.selected_camera
-        if active_camera:
-            processed_stream_url = get_processed_stream_url(active_camera)
-            st.markdown(f"### 📷 Camera Feed: {get_camera_display_name(active_camera)}")
-            if isinstance(processed_stream_url, str) and processed_stream_url.startswith(("http://", "https://", "/")):
-                render_processed_stream_html(processed_stream_url)
-            else:
-                st.info("Worker started. Waiting for processed stream URL...")
-            render_live_camera_stats()
+    active_camera = st.session_state.selected_camera
+    if active_camera:
+        processed_stream_url = get_processed_stream_url(active_camera)
+        st.markdown(f"### 📷 Camera Feed: {get_camera_display_name(active_camera)}")
+        if isinstance(processed_stream_url, str) and processed_stream_url.startswith(("http://", "https://", "/")):
+            render_processed_stream_html(processed_stream_url)
         else:
-            st.info("Click a camera on the map to start a worker and view its live feed.")
+            st.info("Worker started. Waiting for processed stream URL...")
+        render_live_camera_stats()
     else:
-        active_camera = st.session_state.selected_camera
-        if active_camera:
-            processed_stream_url = get_processed_stream_url(active_camera)
-            _, camera_stats = get_worker_snapshot(active_camera)
-            st.markdown(f"### 📷 Camera Feed: {get_camera_display_name(active_camera)}")
-            if isinstance(processed_stream_url, str) and processed_stream_url.startswith(("http://", "https://", "/")):
-                render_processed_stream_html(processed_stream_url)
-            else:
-                st.info("Worker started. Waiting for processed stream URL...")
-            selected_from_stats_nearby = render_camera_stats(camera_stats, camera_points, key_prefix="camera_stats_static")
-            if selected_from_stats_nearby and selected_from_stats_nearby != st.session_state.selected_camera:
-                st.session_state.selected_camera = selected_from_stats_nearby
-                st.session_state.selected_camera_source = "stats_nearby"
-                st.rerun()
-        else:
-            st.info("Click a camera on the map to start a worker and view its live feed.")
+        st.info("Click a camera on the map to start a worker and view its live feed.")
 
     map_header_left, map_header_right = st.columns([8, 1])
     with map_header_left:
@@ -478,6 +449,7 @@ def render_camera_background_ui():
                 width="stretch",
                 on_select=_on_camera_map_select,
                 selection_mode="points",
+                config={"scrollZoom": True, "doubleClick": False, "doubleClickDelay": 1000},
                 key=map_key,
             )
     else:
